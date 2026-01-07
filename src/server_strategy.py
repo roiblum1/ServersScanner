@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Optional, List, Dict, Type
+from typing import Optional, List, Dict, Type, Tuple
 import requests
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
@@ -58,8 +58,21 @@ class VendorStrategy(ABC):
         pass
 
     @abstractmethod
+    def get_server_info(self, server_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Get MAC and BMC IP for a SPECIFIC server (single server lookup).
+        Used by UnifiedServerClient for individual server queries.
+        Returns: (mac_address, bmc_ip)
+        """
+        pass
+
+    @abstractmethod
     def get_server_profiles(self, pattern: str) -> List[ServerProfile]:
-        """Get all server profiles matching pattern"""
+        """
+        Get all server profiles matching pattern (BULK scanning operation).
+        Used by ServerScanner to list many servers efficiently.
+        Returns: List of ServerProfile objects
+        """
         pass
 
     @abstractmethod
