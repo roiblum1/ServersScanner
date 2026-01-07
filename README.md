@@ -86,6 +86,7 @@ python scan_servers.py --show-all
 ```
 
 **How it works:**
+
 1. Queries all configured Kubernetes clusters for BareMetalHost (BMH) resources
 2. Filters out servers whose names match existing BMH resources
 3. Shows only available (not installed) servers
@@ -102,6 +103,22 @@ K8S_NAMESPACE=inventory
 ```
 
 **API Server Format:** `https://api.<cluster_name>.<domain_name>:6443`
+
+**Example workflow:**
+
+```bash
+# Step 1: Scan without K8S filter (shows all servers)
+python scan_servers.py --show-all
+# Output: TOTAL: 20 servers (all vendor profiles)
+
+# Step 2: Configure K8S filter in .env, then scan (default behavior)
+python scan_servers.py
+# Output: TOTAL: 12 servers (only available, 8 already installed)
+
+# With verbose logging to see filtering details
+python scan_servers.py --verbose
+# Shows: "DELL: Filtered out 3 installed servers, 5 available"
+```
 
 ### Advanced Options
 
@@ -256,6 +273,34 @@ Create a `.env` file with your credentials:
 | `UCS_CENTRAL_PASSWORD` | For Cisco | UCS Central password |
 | `UCS_MANAGER_USERNAME` | For Cisco | UCS Manager username (default: admin) |
 | `UCS_MANAGER_PASSWORD` | For Cisco | UCS Manager password |
+| `K8S_CLUSTER_NAMES` | Optional | Comma-separated Kubernetes cluster names |
+| `K8S_DOMAIN_NAME` | Optional | Kubernetes cluster domain name |
+| `K8S_USERNAME` | Optional | Kubernetes username for authentication |
+| `K8S_PASSWORD` | Optional | Kubernetes password for authentication |
+| `K8S_TOKEN` | Optional | Kubernetes token (alternative to username/password) |
+| `K8S_NAMESPACE` | Optional | Kubernetes namespace for BMH resources (default: inventory) |
+
+### Kubernetes BMH Filter Prerequisites
+
+If you want to use the Kubernetes BMH filtering feature:
+
+1. **Install Python Kubernetes client**:
+   ```bash
+   pip install kubernetes
+   ```
+
+2. **Cluster access**: Ensure your credentials (username/password or token) can access the clusters
+
+3. **BareMetalHost CRD**: Clusters must have the BareMetalHost CustomResourceDefinition installed (from Metal3 or OpenShift)
+   - The filter queries `baremetalhosts.metal3.io/v1alpha1` custom resources
+   - If the CRD is not found in a cluster, it will be skipped with a warning
+
+**Why Python Kubernetes client?**
+- ✅ Pure Python - no external kubectl binary required
+- ✅ Better error handling and type safety
+- ✅ Faster - no subprocess overhead
+- ✅ More flexible authentication options
+- ✅ Better suited for development and testing
 
 ## Architecture
 
@@ -275,6 +320,21 @@ This project follows the **Strategy Pattern** for clean separation of vendor-spe
 - **Testable**: Each strategy can be tested independently
 - **Clean**: Main script is simple and focused on CLI concerns
 
+## Integration with BareMetalHostUCS
+
+This project is designed to be compatible with the [BareMetalHostUCS](../BareMetalHostUCS) project. Both share the same:
+
+- **Strategy Pattern architecture** - Same abstract base class structure
+- **Method signatures** - `get_server_info(server_name)` returns `Tuple[Optional[str], Optional[str]]`
+- **Type annotations** - Uses `Tuple` from `typing` module for Python 3.7+ compatibility
+- **Vendor implementations** - HP, Dell, and Cisco strategies follow identical patterns
+
+**Key difference:**
+- **BareMetalHostUCS**: Uses `get_server_info()` for single-server detailed lookups
+- **Scan_Servers**: Uses `get_server_profiles()` for bulk scanning with minimal API calls
+
+Both methods are implemented in all vendor strategies, making the codebase reusable across projects.
+
 ## Notes
 
 - Only configured vendors are scanned (missing credentials = skipped)
@@ -282,13 +342,33 @@ This project follows the **Strategy Pattern** for clean separation of vendor-spe
 - Cisco UCS requires the `ucscsdk` and `ucsmsdk` packages
 - The scanner connects to each vendor, queries profiles, and disconnects properly
 - All vendor implementations follow the same pattern used in the BareMetalHostUCS project
+- **READ-ONLY operations**: No data modifications, only queries (GET requests and kubectl get commands)
+
+## Two Scanning Modes
+
+This scanner supports **two distinct use cases**:
+
+### 1. Bulk Scanning - `get_server_profiles(pattern)`
+Used by the CLI scanner to **list many servers efficiently**:
+- Returns ONLY server profile names (no MAC/BMC data)
+- Minimal API calls - very fast
+- Used for inventory and availability checking
+- Default CLI behavior
+
+### 2. Single Server Lookup - `get_server_info(server_name)`
+Used by BareMetalHostUCS project for **detailed single server queries**:
+- Returns MAC address + BMC IP for ONE specific server
+- Makes necessary API calls to fetch hardware details
+- Used when you need to provision/configure a specific server
+- Compatible with BareMetalHostUCS interface
 
 ## Command Line Options
 
 ```
 usage: scan_servers.py [-h] [--pattern PATTERN] [--vendor {HP,DELL,CISCO}]
                        [--format {list,table,json}] [--json]
-                       [--env-file ENV_FILE] [--check-duplicates] [--verbose]
+                       [--env-file ENV_FILE] [--check-duplicates]
+                       [--show-all] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -303,5 +383,7 @@ options:
                         Path to .env file with credentials
   --check-duplicates, -d
                         Check for duplicate profile names across vendors
+  --show-all            Show all servers including installed ones (default: filter out
+                        installed servers if K8S configured)
   --verbose             Enable verbose logging
 ```

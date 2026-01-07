@@ -1,8 +1,8 @@
 import logging
-import subprocess
-import json
 from typing import Set, Optional
 from dataclasses import dataclass
+from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,11 @@ class KubernetesBMHFilter:
     Kubernetes BareMetalHost filter to identify already-installed servers.
     Queries BMH resources from Kubernetes clusters and filters them from scan results.
     """
+
+    # BareMetalHost CRD details (Metal3)
+    BMH_GROUP = "metal3.io"
+    BMH_VERSION = "v1alpha1"
+    BMH_PLURAL = "baremetalhosts"
 
     def __init__(self, config: KubernetesConfig):
         self.config = config
@@ -60,7 +65,7 @@ class KubernetesBMHFilter:
             logger.info(f"Querying cluster: {cluster_name} at {api_server}")
 
             try:
-                bmh_names = self._get_bmh_from_cluster(api_server)
+                bmh_names = self._get_bmh_from_cluster(api_server, cluster_name)
                 if bmh_names:
                     logger.info(f"Found {len(bmh_names)} BMH resources in cluster '{cluster_name}'")
                     self._installed_servers.update(bmh_names)
@@ -72,63 +77,66 @@ class KubernetesBMHFilter:
         logger.info(f"Total installed servers across all clusters: {len(self._installed_servers)}")
         return self._installed_servers
 
-    def _get_bmh_from_cluster(self, api_server: str) -> Set[str]:
+    def _get_bmh_from_cluster(self, api_server: str, cluster_name: str) -> Set[str]:
         """
-        Query BareMetalHost resources from a specific cluster.
+        Query BareMetalHost resources from a specific cluster using Python Kubernetes client.
         Returns: Set of BMH names
         """
-        cmd = [
-            "kubectl", "get", "baremetalhosts",
-            "-n", self.config.namespace,
-            "-o", "json",
-            "--server", api_server
-        ]
-
-        # Add authentication
-        if self.config.token:
-            cmd.extend(["--token", self.config.token])
-        elif self.config.username and self.config.password:
-            cmd.extend(["--username", self.config.username])
-            cmd.extend(["--password", self.config.password])
-
-        # Disable certificate verification for internal clusters
-        cmd.append("--insecure-skip-tls-verify")
-
-        logger.debug(f"Executing: kubectl get baremetalhosts -n {self.config.namespace} --server {api_server}")
+        bmh_names = set()
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True
-            )
+            # Create custom configuration for this cluster
+            configuration = client.Configuration()
+            configuration.host = api_server
+            configuration.verify_ssl = False  # Disable SSL verification for internal clusters
 
-            data = json.loads(result.stdout)
-            items = data.get("items", [])
+            # Configure authentication
+            if self.config.token:
+                configuration.api_key = {"authorization": f"Bearer {self.config.token}"}
+            elif self.config.username and self.config.password:
+                configuration.username = self.config.username
+                configuration.password = self.config.password
+            else:
+                logger.error(f"No valid authentication method configured for cluster {cluster_name}")
+                return bmh_names
 
-            bmh_names = set()
-            for item in items:
-                name = item.get("metadata", {}).get("name")
-                if name:
-                    bmh_names.add(name)
-                    logger.debug(f"Found BMH: {name}")
+            # Create API client
+            api_client = client.ApiClient(configuration)
+            custom_api = client.CustomObjectsApi(api_client)
 
-            return bmh_names
+            logger.debug(f"Querying BareMetalHost resources in namespace '{self.config.namespace}'")
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"Timeout querying cluster at {api_server}")
-            return set()
-        except subprocess.CalledProcessError as e:
-            logger.error(f"kubectl command failed: {e.stderr}")
-            return set()
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse kubectl output: {e}")
-            return set()
+            # Query BareMetalHost custom resources
+            try:
+                bmh_list = custom_api.list_namespaced_custom_object(
+                    group=self.BMH_GROUP,
+                    version=self.BMH_VERSION,
+                    namespace=self.config.namespace,
+                    plural=self.BMH_PLURAL,
+                    _request_timeout=30
+                )
+
+                # Extract BMH names
+                for item in bmh_list.get("items", []):
+                    metadata = item.get("metadata", {})
+                    name = metadata.get("name")
+                    if name:
+                        bmh_names.add(name)
+                        logger.debug(f"Found BMH: {name}")
+
+            except ApiException as e:
+                if e.status == 404:
+                    logger.warning(f"BareMetalHost CRD not found in cluster '{cluster_name}' - cluster may not have Metal3 installed")
+                else:
+                    logger.error(f"Kubernetes API error querying BMH in cluster '{cluster_name}': {e.status} - {e.reason}")
+            finally:
+                # Clean up API client
+                api_client.close()
+
         except Exception as e:
-            logger.error(f"Unexpected error querying BMH: {e}")
-            return set()
+            logger.error(f"Error connecting to cluster '{cluster_name}': {type(e).__name__}: {e}")
+
+        return bmh_names
 
     def filter_available_servers(self, all_servers: Set[str]) -> Set[str]:
         """
