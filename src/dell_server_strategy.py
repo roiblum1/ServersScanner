@@ -118,17 +118,14 @@ class DellServerStrategy(VendorStrategy):
     def get_server_profiles(self, pattern: str) -> List[ServerProfile]:
         """
         Scan and return ALL server profiles matching pattern (BULK operation for scanning).
-        This is optimized to minimize API calls.
+        Returns ONLY profile names - no MAC/BMC lookups to avoid wasting API calls.
         """
         self.ensure_connected()
 
         profiles: List[ServerProfile] = []
         regex = re.compile(pattern, re.IGNORECASE)
 
-        # Build device cache for MAC lookup (bulk operation)
-        device_cache = self._build_device_cache()
-
-        # Paginate through profiles
+        # Paginate through profiles - NAMES ONLY
         skip = 0
         top = 100
 
@@ -142,21 +139,11 @@ class DellServerStrategy(VendorStrategy):
                 name = profile.get("ProfileName", "")
 
                 if regex.match(name):
-                    idrac_ip = profile.get("TargetName")
-
+                    # Just the name - no MAC/BMC lookups
                     server_profile = ServerProfile(
                         name=name,
-                        vendor="DELL",
-                        bmc_ip=idrac_ip
+                        vendor="DELL"
                     )
-
-                    # Try to get MAC from device cache
-                    if idrac_ip and idrac_ip in device_cache:
-                        device_info = device_cache[idrac_ip]
-                        server_profile.mac_address = device_info.get("mac")
-                        server_profile.model = device_info.get("model")
-                        server_profile.serial_number = device_info.get("serial")
-
                     profiles.append(server_profile)
 
             if len(data.get("value", [])) < top:

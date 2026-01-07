@@ -127,52 +127,27 @@ class CiscoServerStrategy(VendorStrategy):
         return None, None
 
     def get_server_profiles(self, pattern: str) -> List[ServerProfile]:
-        """Get all server profiles matching pattern from UCS Central"""
+        """
+        Get all server profiles matching pattern from UCS Central.
+        Returns ONLY profile names - no MAC/KVM lookups to avoid wasting API calls.
+        """
         self.ensure_connected()
 
         profiles: List[ServerProfile] = []
         regex = re.compile(pattern, re.IGNORECASE)
 
-        # STEP 1: Query all service profiles from UCS Central (one bulk query)
+        # Query all service profiles from UCS Central - NAMES ONLY
         logger.info("Fetching all service profiles from UCS Central...")
         servers = self._ucsc_handle.query_classid("lsServer")
         logger.info(f"Found {len(servers)} service profiles in UCS Central")
 
-        # STEP 2: Group servers by domain to minimize UCS Manager connections
-        servers_by_domain = {}
         for server in servers:
             if regex.match(server.name):
-                domain = server.domain if server.domain and server.domain.strip() else None
-                if domain:
-                    if domain not in servers_by_domain:
-                        servers_by_domain[domain] = []
-                    servers_by_domain[domain].append(server)
-                else:
-                    # Server without domain - add without details
-                    profiles.append(ServerProfile(
-                        name=server.name,
-                        vendor="CISCO",
-                        domain=None
-                    ))
-
-        # STEP 3: Connect to each UCS Manager domain once and fetch all details
-        for domain, domain_servers in servers_by_domain.items():
-            logger.info(f"Connecting to UCS Manager domain '{domain}' for {len(domain_servers)} servers...")
-            details_cache = self._get_domain_server_details(domain, domain_servers)
-
-            # Create profiles with cached details
-            for server in domain_servers:
+                # Just the name - no MAC/KVM lookups
                 server_profile = ServerProfile(
                     name=server.name,
-                    vendor="CISCO",
-                    domain=domain
+                    vendor="CISCO"
                 )
-
-                if server.dn in details_cache:
-                    details = details_cache[server.dn]
-                    server_profile.mac_address = details.get("mac")
-                    server_profile.bmc_ip = details.get("kvm_ip")
-
                 profiles.append(server_profile)
 
         return profiles

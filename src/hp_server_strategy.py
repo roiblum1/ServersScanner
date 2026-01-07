@@ -123,34 +123,14 @@ class HPServerStrategy(VendorStrategy):
     def get_server_profiles(self, pattern: str) -> List[ServerProfile]:
         """
         Scan and return ALL server profiles matching pattern (BULK operation for scanning).
-        This is optimized to minimize API calls.
+        Returns ONLY profile names - no MAC/BMC lookups to avoid wasting API calls.
         """
         self.ensure_connected()
 
         profiles: List[ServerProfile] = []
         regex = re.compile(pattern, re.IGNORECASE)
 
-        # STEP 1: Fetch ALL server hardware in one request (with details included)
-        logger.info("Fetching all server hardware from HP OneView...")
-        hardware_url = f"{self.base_url}/rest/server-hardware?count=-1"
-        hardware_response = self._session.get(hardware_url)
-        hardware_response.raise_for_status()
-        all_hardware = hardware_response.json().get("members", [])
-
-        # Build hardware cache by URI for fast lookup
-        hardware_cache = {}
-        for hw in all_hardware:
-            hw_uri = hw.get("uri")
-            if hw_uri:
-                hardware_cache[hw_uri] = {
-                    "model": hw.get("model"),
-                    "ilo_ip": self._extract_ilo_ip(hw),
-                    "mac": self._extract_mac(hw)
-                }
-
-        logger.info(f"Cached {len(hardware_cache)} hardware entries")
-
-        # STEP 2: Paginate through all server profiles (lightweight request)
+        # Paginate through all server profiles - NAMES ONLY
         next_page_uri = f"{self.base_url}/rest/server-profiles?count=-1"
 
         while next_page_uri:
@@ -162,20 +142,11 @@ class HPServerStrategy(VendorStrategy):
                 name = profile.get("name", "")
 
                 if regex.match(name):
+                    # Just the name - no MAC/BMC lookups
                     server_profile = ServerProfile(
                         name=name,
-                        vendor="HP",
-                        serial_number=profile.get("serialNumber")
+                        vendor="HP"
                     )
-
-                    # Get hardware details from cache (no extra API call)
-                    hardware_uri = profile.get("serverHardwareUri")
-                    if hardware_uri and hardware_uri in hardware_cache:
-                        hw_details = hardware_cache[hardware_uri]
-                        server_profile.mac_address = hw_details.get("mac")
-                        server_profile.bmc_ip = hw_details.get("ilo_ip")
-                        server_profile.model = hw_details.get("model")
-
                     profiles.append(server_profile)
 
             next_page_uri = page_data.get("nextPageUri")
