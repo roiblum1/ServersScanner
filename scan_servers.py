@@ -155,6 +155,11 @@ def main():
         help="Check for duplicate profile names across vendors"
     )
     parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Show all servers including installed ones (default: filter out installed servers if K8S configured)"
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -182,7 +187,8 @@ def main():
 
     # Initialize scanner and run scan
     scanner = initialize_scanner()
-    results = scanner.scan(pattern=args.pattern, vendors=args.vendor)
+    filter_installed = not args.show_all  # Default: filter out installed unless --show-all is specified
+    results = scanner.scan(pattern=args.pattern, vendors=args.vendor, filter_installed=filter_installed)
 
     # Check for duplicates
     if args.check_duplicates:

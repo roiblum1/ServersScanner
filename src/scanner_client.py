@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Dict, List, Optional
 from src.server_strategy import VendorType, VendorStrategyFactory, ServerProfile
+from src.kubernetes_bmh_filter import KubernetesBMHFilter, KubernetesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,8 @@ class ServerScanner:
                  central_username=None,
                  central_password=None,
                  manager_username=None,
-                 manager_password=None):
+                 manager_password=None,
+                 k8s_config: Optional[KubernetesConfig] = None):
         """
         Initialize server scanner with credentials for all systems.
 
@@ -36,6 +38,7 @@ class ServerScanner:
             central_password: UCS Central password
             manager_username: UCS Manager username
             manager_password: UCS Manager password
+            k8s_config: Optional Kubernetes configuration for BMH filtering
         """
         self._credentials = {
             VendorType.HP: {
@@ -57,6 +60,21 @@ class ServerScanner:
             }
         }
         self._strategies = {}
+        self._k8s_filter: Optional[KubernetesBMHFilter] = None
+
+        # Initialize Kubernetes BMH filter if configured
+        if k8s_config and k8s_config.cluster_names:
+            try:
+                self._k8s_filter = KubernetesBMHFilter(k8s_config)
+                if self._k8s_filter.is_configured():
+                    logger.info("Kubernetes BMH filter configured")
+                else:
+                    logger.warning("Kubernetes BMH filter not properly configured")
+                    self._k8s_filter = None
+            except Exception as e:
+                logger.error(f"Failed to initialize Kubernetes BMH filter: {e}")
+                self._k8s_filter = None
+
         self._initialize_strategies()
 
     def _initialize_strategies(self):
@@ -72,16 +90,18 @@ class ServerScanner:
 
     def scan(self,
              pattern: str = r"^ocp4-hypershift-.*",
-             vendors: Optional[List[str]] = None) -> Dict[str, List[ServerProfile]]:
+             vendors: Optional[List[str]] = None,
+             filter_installed: bool = True) -> Dict[str, List[ServerProfile]]:
         """
         Scan all configured vendors for server profiles matching pattern.
 
         Args:
             pattern: Regex pattern to match server names
             vendors: Optional list of vendors to scan (HP, DELL, CISCO)
+            filter_installed: If True and K8S is configured, filter out already-installed servers
 
         Returns:
-            Dict mapping vendor name to list of ServerProfile
+            Dict mapping vendor name to list of ServerProfile (available servers only if filtering enabled)
         """
         results: Dict[str, List[ServerProfile]] = {}
 
@@ -100,7 +120,45 @@ class ServerScanner:
             finally:
                 strategy.disconnect()
 
+        # Filter out installed servers if K8S filter is configured
+        if filter_installed and self._k8s_filter:
+            results = self._filter_installed_servers(results)
+
         return results
+
+    def _filter_installed_servers(self, results: Dict[str, List[ServerProfile]]) -> Dict[str, List[ServerProfile]]:
+        """
+        Filter out servers that are already installed (exist as BMH in Kubernetes).
+
+        Args:
+            results: Original scan results
+
+        Returns:
+            Filtered results with only available (not installed) servers
+        """
+        # Get all server names from scan results
+        all_server_names = set()
+        for profiles in results.values():
+            for profile in profiles:
+                all_server_names.add(profile.name)
+
+        # Get installed servers from Kubernetes
+        installed_servers = self._k8s_filter.get_installed_servers()
+
+        # Filter results
+        filtered_results: Dict[str, List[ServerProfile]] = {}
+        for vendor, profiles in results.items():
+            available_profiles = [
+                p for p in profiles
+                if p.name not in installed_servers
+            ]
+            filtered_results[vendor] = available_profiles
+
+            installed_count = len(profiles) - len(available_profiles)
+            if installed_count > 0:
+                logger.info(f"{vendor}: Filtered out {installed_count} installed servers, {len(available_profiles)} available")
+
+        return filtered_results
 
     def find_duplicates(self, results: Dict[str, List[ServerProfile]]) -> List[str]:
         """Find profile names that exist in multiple vendors"""
@@ -153,6 +211,21 @@ def initialize_scanner():
     manager_username = os.getenv("UCS_MANAGER_USERNAME", "admin")
     manager_password = os.getenv("UCS_MANAGER_PASSWORD")
 
+    # Initialize Kubernetes BMH filter config if available
+    k8s_config = None
+    k8s_cluster_names = os.getenv("K8S_CLUSTER_NAMES")
+    k8s_domain_name = os.getenv("K8S_DOMAIN_NAME")
+
+    if k8s_cluster_names and k8s_domain_name:
+        k8s_config = KubernetesConfig(
+            cluster_names=k8s_cluster_names,
+            domain_name=k8s_domain_name,
+            username=os.getenv("K8S_USERNAME"),
+            password=os.getenv("K8S_PASSWORD"),
+            token=os.getenv("K8S_TOKEN"),
+            namespace=os.getenv("K8S_NAMESPACE", "inventory")
+        )
+
     scanner = ServerScanner(
         oneview_ip=oneview_ip,
         oneview_username=oneview_username,
@@ -164,7 +237,8 @@ def initialize_scanner():
         central_username=central_username,
         central_password=central_password,
         manager_username=manager_username,
-        manager_password=manager_password
+        manager_password=manager_password,
+        k8s_config=k8s_config
     )
 
     return scanner

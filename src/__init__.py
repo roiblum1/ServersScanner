@@ -10,6 +10,7 @@ from src.hp_server_strategy import HPServerStrategy
 from src.dell_server_strategy import DellServerStrategy
 from src.cisco_server_strategy import CiscoServerStrategy
 from src.scanner_client import ServerScanner, initialize_scanner
+from src.kubernetes_bmh_filter import KubernetesBMHFilter, KubernetesConfig
 
 __all__ = [
     "VendorStrategy",
@@ -20,5 +21,7 @@ __all__ = [
     "DellServerStrategy",
     "CiscoServerStrategy",
     "ServerScanner",
-    "initialize_scanner"
+    "initialize_scanner",
+    "KubernetesBMHFilter",
+    "KubernetesConfig"
 ]

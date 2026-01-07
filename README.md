@@ -8,16 +8,17 @@ Uses the **Strategy Pattern** to cleanly separate vendor-specific logic into mod
 
 ```
 Scan_Servers/
-├── scan_servers.py              # Main CLI entry point
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Example environment configuration
+├── scan_servers.py                 # Main CLI entry point
+├── requirements.txt                # Python dependencies
+├── .env.example                    # Example environment configuration
 └── src/
-    ├── __init__.py              # Package initialization
-    ├── server_strategy.py       # Abstract base class & factory
-    ├── hp_server_strategy.py    # HP OneView implementation
-    ├── dell_server_strategy.py  # Dell OME implementation
-    ├── cisco_server_strategy.py # Cisco UCS implementation
-    └── scanner_client.py        # Unified scanner client
+    ├── __init__.py                 # Package initialization
+    ├── server_strategy.py          # Abstract base class & factory
+    ├── hp_server_strategy.py       # HP OneView implementation
+    ├── dell_server_strategy.py     # Dell OME implementation
+    ├── cisco_server_strategy.py    # Cisco UCS implementation
+    ├── kubernetes_bmh_filter.py    # Kubernetes BMH filter (optional)
+    └── scanner_client.py           # Unified scanner client
 ```
 
 ## Quick Start
@@ -71,6 +72,36 @@ python scan_servers.py --format table
 python scan_servers.py --format json
 python scan_servers.py --json  # shortcut
 ```
+
+### Kubernetes BMH Filtering (Optional)
+
+The scanner can automatically filter out servers that are already installed (exist as BareMetalHost resources in Kubernetes):
+
+```bash
+# Default: Show only AVAILABLE servers (filters out installed ones)
+python scan_servers.py
+
+# Show ALL servers including installed ones
+python scan_servers.py --show-all
+```
+
+**How it works:**
+1. Queries all configured Kubernetes clusters for BareMetalHost (BMH) resources
+2. Filters out servers whose names match existing BMH resources
+3. Shows only available (not installed) servers
+
+**Configuration** (add to `.env`):
+```bash
+K8S_CLUSTER_NAMES=cluster1,cluster2,cluster3
+K8S_DOMAIN_NAME=example.com
+K8S_USERNAME=admin
+K8S_PASSWORD=your-password
+# OR use token authentication:
+# K8S_TOKEN=your-token
+K8S_NAMESPACE=inventory
+```
+
+**API Server Format:** `https://api.<cluster_name>.<domain_name>:6443`
 
 ### Advanced Options
 
