@@ -6,7 +6,7 @@ Uses hostname/requestedHostname logic to extract server names.
 """
 
 import logging
-from typing import Set, Optional
+from typing import Set, Optional, Dict, List
 from dataclasses import dataclass
 from kubernetes import client
 from kubernetes.client.rest import ApiException
@@ -224,6 +224,39 @@ class AgentFilter:
                 f"Kubernetes API error for cluster '{cluster_name}': "
                 f"{e.status} - {e.reason}"
             )
+
+    def get_installed_servers_by_cluster(self) -> Dict[str, List[str]]:
+        """
+        Get installed servers grouped by cluster.
+
+        Returns:
+            Dict mapping cluster name to list of installed server names
+        """
+        result = {}
+        cluster_list = [c.strip() for c in self.config.cluster_names.split(',')]
+
+        logger.info(f"Fetching installed servers per cluster from {len(cluster_list)} clusters...")
+
+        for cluster_index, cluster_name in enumerate(cluster_list):
+            if not cluster_name:
+                continue
+
+            api_server = f"https://api.{cluster_name}.{self.config.domain_name}:6443"
+            logger.debug(f"Querying cluster: {cluster_name} at {api_server}")
+
+            try:
+                agent_names = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                if agent_names:
+                    result[cluster_name] = sorted(list(agent_names))
+                    logger.info(f"Cluster '{cluster_name}': {len(agent_names)} servers installed")
+                else:
+                    result[cluster_name] = []
+                    logger.debug(f"Cluster '{cluster_name}': No servers installed")
+            except Exception as e:
+                logger.warning(f"Failed to query cluster '{cluster_name}': {e}")
+                result[cluster_name] = []
+
+        return result
 
     def clear_cache(self):
         """Clear cached Agent data"""

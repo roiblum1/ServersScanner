@@ -10,3 +10,7 @@ kubernetes>=28.1.0
 # Optional - for Cisco UCS support
 # ucscsdk>=0.9.14
 # ucsmsdk>=0.9.14
+
+# Web UI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0

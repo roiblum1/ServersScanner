@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Server Scanner Dashboard - Monitor available and installed servers across zones and clusters">
+    <meta name="author" content="Server Scanner">
+    <title>Server Scanner Dashboard</title>
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖥️</text></svg>">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="ambient" aria-hidden="true">
+        <span class="orb orb-a"></span>
+        <span class="orb orb-b"></span>
+        <span class="grid"></span>
+    </div>
+    <div class="container">
+        <!-- Header -->
+        <header class="page-header">
+            <div class="header-content">
+                <div class="kicker">Infrastructure</div>
+                <h1>Server Scanner</h1>
+                <p class="subtitle">Monitor available and installed servers across zones, vendors, and clusters</p>
+            </div>
+            <div class="header-meta">
+                <span class="meta-chip">Auto-refresh 30s</span>
+                <span class="meta-chip accent">Live inventory</span>
+            </div>
+        </header>
+
+        <!-- Summary Cards -->
+        <section class="summary" id="summary" aria-label="Summary Statistics">
+            <div class="summary-card available">
+                <div class="icon">✅</div>
+                <div class="number" id="availableCount">-</div>
+                <div class="label">Available</div>
+            </div>
+
+            <div class="summary-card installed">
+                <div class="icon">❌</div>
+                <div class="number" id="installedCount">-</div>
+                <div class="label">Installed</div>
+            </div>
+
+            <div class="summary-card clusters">
+                <div class="icon">📦</div>
+                <div class="number" id="clusterCount">-</div>
+                <div class="label">Clusters</div>
+            </div>
+
+            <div class="summary-card zones">
+                <div class="icon">📍</div>
+                <div class="number" id="zoneCount">-</div>
+                <div class="label">Zones</div>
+            </div>
+        </section>
+
+        <!-- Controls -->
+        <section class="controls" aria-label="Filter Controls">
+            <input
+                type="text"
+                id="zoneFilter"
+                class="zone-input"
+                placeholder="🔍 Filter by zones (e.g., zone-a,zone-b)"
+                aria-label="Zone filter"
+            >
+            <button id="refreshBtn" aria-label="Refresh data">
+                🔄 Refresh
+            </button>
+            <button id="clearBtn" class="secondary" aria-label="Clear filter">
+                ✖️ Clear Filter
+            </button>
+        </section>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Zones Section -->
+            <div>
+                <!-- Loading State -->
+                <div id="loading" class="loading" aria-live="polite">
+                    Loading server data
+                </div>
+
+                <!-- Error State -->
+                <div id="error" class="error" style="display: none;" role="alert"></div>
+
+                <!-- Zones Container -->
+                <div id="zones" aria-label="Server zones"></div>
+            </div>
+
+            <!-- Cluster Panel -->
+            <aside class="cluster-panel" id="clusterPanel" style="display: none;" aria-label="Cluster information">
+                <h2>📊 Clusters</h2>
+                <div id="clusters"></div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
