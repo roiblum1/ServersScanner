@@ -24,17 +24,13 @@ class AgentConfig:
     Attributes:
         cluster_names: Comma-separated list of cluster names
         domain_name: Domain name for API servers
-        token: Single token OR comma-separated tokens (one per cluster)
+        token: Comma-separated tokens (one per cluster)
         namespace: Namespace to query (default: 'assisted-installer')
-        username: Optional basic auth username (deprecated)
-        password: Optional basic auth password (deprecated)
     """
     cluster_names: str
     domain_name: str
-    token: Optional[str] = None
+    token: str
     namespace: str = "assisted-installer"
-    username: Optional[str] = None
-    password: Optional[str] = None
 
     def get_token_for_cluster(self, cluster_index: int) -> Optional[str]:
         """
@@ -44,22 +40,14 @@ class AgentConfig:
             cluster_index: Index of the cluster
 
         Returns:
-            Token for the cluster or None
+            Token for the cluster or None if index out of range
         """
-        if not self.token:
-            return None
-
         tokens = [t.strip() for t in self.token.split(',')]
 
-        # Single token for all clusters
-        if len(tokens) == 1:
-            return tokens[0]
-
-        # Per-cluster tokens
         if cluster_index < len(tokens):
             return tokens[cluster_index]
         else:
-            logger.warning(f"Not enough tokens. Expected {cluster_index + 1}, got {len(tokens)}")
+            logger.error(f"Not enough tokens provided. Need token for cluster #{cluster_index + 1}, but only {len(tokens)} tokens configured.")
             return None
 
 
@@ -91,13 +79,10 @@ class AgentFilter:
 
     def is_configured(self) -> bool:
         """Check if Agent filter is properly configured"""
-        has_auth = bool(self.config.token) or (
-            bool(self.config.username) and bool(self.config.password)
-        )
         return all([
             self.config.cluster_names,
             self.config.domain_name,
-            has_auth
+            self.config.token
         ])
 
     def get_installed_servers(self) -> Set[str]:
@@ -157,21 +142,13 @@ class AgentFilter:
 
             # Get token for this cluster
             cluster_token = self.config.get_token_for_cluster(cluster_index)
-
-            # Configure authentication
-            if cluster_token:
-                configuration.api_key = {"authorization": f"Bearer {cluster_token}"}
-                logger.debug(f"Using token authentication for cluster {cluster_name} (token #{cluster_index + 1})")
-            elif self.config.username and self.config.password:
-                import base64
-                credentials = f"{self.config.username}:{self.config.password}"
-                encoded = base64.b64encode(credentials.encode()).decode()
-                configuration.api_key = {"authorization": f"Basic {encoded}"}
-                logger.debug(f"Using basic authentication for cluster {cluster_name}")
-                logger.warning("Basic auth is deprecated. Use token authentication instead.")
-            else:
-                logger.error(f"No authentication configured for cluster {cluster_name}")
+            if not cluster_token:
+                logger.error(f"No token available for cluster {cluster_name}")
                 return server_names
+
+            # Configure token authentication
+            configuration.api_key = {"authorization": f"Bearer {cluster_token}"}
+            logger.debug(f"Using token authentication for cluster {cluster_name} (token #{cluster_index + 1})")
 
             # Create API client
             api_client = client.ApiClient(configuration)
@@ -236,16 +213,12 @@ class AgentFilter:
                 f"(cluster #{cluster_index + 1})"
             )
             logger.error(f"Reason: {e.reason}")
-            if self.config.username and not self.config.token:
-                logger.error("Using deprecated username/password authentication.")
-                logger.error("Use token authentication instead. See GET_TOKEN.md")
-            else:
-                logger.error(f"Token for cluster #{cluster_index + 1} may be invalid or lack permissions.")
-                logger.error("Required permissions: get, list on agents.agent-install.openshift.io")
-                logger.error("Tip: K8S_TOKEN=token1,token2,token3 (one per cluster)")
+            logger.error(f"Token for cluster #{cluster_index + 1} may be invalid or lack permissions.")
+            logger.error("Required permissions: get, list on agents.agent-install.openshift.io")
+            logger.error("Tip: Ensure K8S_TOKEN has comma-separated tokens matching cluster order")
         elif e.status == 401:
             logger.error(f"Authentication failed (401 Unauthorized) for cluster '{cluster_name}'")
-            logger.error("Credentials are invalid or expired.")
+            logger.error(f"Token for cluster #{cluster_index + 1} is invalid or expired.")
         else:
             logger.error(
                 f"Kubernetes API error for cluster '{cluster_name}': "

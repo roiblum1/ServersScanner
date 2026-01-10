@@ -270,14 +270,13 @@ def initialize_scanner() -> ScannerService:
     agent_config = None
     k8s_cluster_names = os.getenv("K8S_CLUSTER_NAMES")
     k8s_domain_name = os.getenv("K8S_DOMAIN_NAME")
+    k8s_token = os.getenv("K8S_TOKEN")
 
-    if k8s_cluster_names and k8s_domain_name:
+    if k8s_cluster_names and k8s_domain_name and k8s_token:
         agent_config = AgentConfig(
             cluster_names=k8s_cluster_names,
             domain_name=k8s_domain_name,
-            username=os.getenv("K8S_USERNAME"),
-            password=os.getenv("K8S_PASSWORD"),
-            token=os.getenv("K8S_TOKEN"),
+            token=k8s_token,
             namespace=os.getenv("K8S_NAMESPACE", "assisted-installer")
         )
 
