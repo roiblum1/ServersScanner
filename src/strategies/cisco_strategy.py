@@ -3,13 +3,14 @@ import re
 from typing import Dict, List, Optional, Tuple
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
-from src.server_strategy import VendorStrategy, ServerProfile
+from .base_strategy import VendorStrategy
+from ..models import ServerProfile
 
 disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
-class CiscoServerStrategy(VendorStrategy):
+class CiscoStrategy(VendorStrategy):
     """Cisco UCS Central server profile scanner"""
 
     def __init__(self, credentials: Dict[str, str]):

@@ -95,12 +95,22 @@ python scan_servers.py --show-all
 ```bash
 K8S_CLUSTER_NAMES=cluster1,cluster2,cluster3
 K8S_DOMAIN_NAME=example.com
-K8S_USERNAME=admin
-K8S_PASSWORD=your-password
-# OR use token authentication:
-# K8S_TOKEN=your-token
+
+# RECOMMENDED: Use token authentication (modern Kubernetes)
+# Option 1: Single token for all clusters (if they share the same service account)
+K8S_TOKEN=your-service-account-token-here
+
+# Option 2: Per-cluster tokens (comma-separated, one per cluster in same order)
+# K8S_TOKEN=token-for-cluster1,token-for-cluster2,token-for-cluster3
+
 K8S_NAMESPACE=inventory
+
+# DEPRECATED: Username/password (may not work with modern clusters)
+# K8S_USERNAME=admin
+# K8S_PASSWORD=your-password
 ```
+
+**Important**: Modern Kubernetes clusters require **token-based authentication**. See [GET_TOKEN.md](GET_TOKEN.md) for instructions on obtaining a service account token.
 
 **API Server Format:** `https://api.<cluster_name>.<domain_name>:6443`
 
