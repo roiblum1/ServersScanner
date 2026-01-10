@@ -11,43 +11,45 @@ Features:
 """
 
 import os
+import sys
 import asyncio
+import argparse
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 import logging
 
+from src.config import (
+    AppConfig,
+    VendorConfig,
+    KubernetesConfig,
+    ZoneConfig,
+    FeatureFlags,
+    load_environment,
+    setup_logging,
+    validate_config
+)
 from src.services.scanner_service import initialize_scanner
 from src.models import ServerProfile
 from src.filters import AgentFilter
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Logger will be configured later
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
-
-app = FastAPI(
-    title="Server Scanner Dashboard",
-    description="Visualize available and installed servers across zones, vendors, and clusters",
-    version="1.0.0"
-)
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# App instance will be created after config is loaded
+app = None
 
 
 # ============================================================================
 # Cache Configuration
 # ============================================================================
 
-CACHE_TTL_SECONDS = 3600  # 1 hour
-BACKGROUND_SCAN_INTERVAL = 3600  # 1 hour
+# Use config values (will be initialized from AppConfig)
+CACHE_TTL_SECONDS = None
+BACKGROUND_SCAN_INTERVAL = None
 
 class CacheEntry:
     """Cache entry with timestamp and data"""
@@ -251,7 +253,7 @@ async def startup_event():
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the main HTML page"""
-    return FileResponse("templates/index.html")
+    return FileResponse("static/html/index.html")
 
 
 @app.get("/api/servers", response_model=DashboardData)
@@ -491,9 +493,143 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
 
 
 # ============================================================================
+# Initialization
+# ============================================================================
+
+def create_app():
+    """Create and configure FastAPI application"""
+    global app, CACHE_TTL_SECONDS, BACKGROUND_SCAN_INTERVAL
+
+    # Initialize cache settings from config
+    CACHE_TTL_SECONDS = AppConfig.CACHE_TTL_SECONDS
+    BACKGROUND_SCAN_INTERVAL = AppConfig.BACKGROUND_SCAN_INTERVAL
+
+    # Create FastAPI app
+    app = FastAPI(
+        title=AppConfig.APP_NAME,
+        description=AppConfig.APP_DESCRIPTION,
+        version=AppConfig.APP_VERSION
+    )
+
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=AppConfig.STATIC_DIR), name="static")
+
+    return app
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
-if __name__ == "__main__":
+def main():
+    """
+    Main entry point with CLI argument support.
+
+    Supports:
+        --env-file: Path to .env file
+        --verbose: Enable debug logging
+        --host: Server host (default: 0.0.0.0)
+        --port: Server port (default: 8000)
+        --reload: Enable auto-reload (development)
+    """
+    parser = argparse.ArgumentParser(
+        description="Server Scanner Dashboard - Web UI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Start with default .env
+  python web_ui.py
+
+  # Use custom .env file
+  python web_ui.py --env-file /path/to/custom.env
+
+  # Enable verbose logging
+  python web_ui.py --verbose
+
+  # Custom host and port
+  python web_ui.py --host 127.0.0.1 --port 9000
+
+  # Development mode with auto-reload
+  python web_ui.py --reload --verbose
+        """
+    )
+
+    parser.add_argument(
+        "--env-file", "-e",
+        help="Path to .env file with credentials (default: .env)"
+    )
+
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose (DEBUG) logging"
+    )
+
+    parser.add_argument(
+        "--host",
+        default=None,
+        help=f"Server host (default: {AppConfig.HOST})"
+    )
+
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=None,
+        help=f"Server port (default: {AppConfig.PORT})"
+    )
+
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload for development"
+    )
+
+    parser.add_argument(
+        "--log-file",
+        help="Path to log file (optional)"
+    )
+
+    args = parser.parse_args()
+
+    # Load environment
+    if args.env_file:
+        load_environment(args.env_file)
+    # else: already loaded by config module
+
+    # Setup logging
+    setup_logging(verbose=args.verbose, log_file=args.log_file)
+
+    # Validate configuration
+    try:
+        validate_config()
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        sys.exit(1)
+
+    # Create app
+    create_app()
+
+    # Determine host and port
+    host = args.host or AppConfig.HOST
+    port = args.port or AppConfig.PORT
+
+    # Log startup info
+    logger.info(f"Starting {AppConfig.APP_NAME} v{AppConfig.APP_VERSION}")
+    logger.info(f"Host: {host}:{port}")
+    logger.info(f"Cache TTL: {AppConfig.CACHE_TTL_SECONDS}s")
+    logger.info(f"Background scan interval: {AppConfig.BACKGROUND_SCAN_INTERVAL}s")
+    logger.info(f"Kubernetes configured: {KubernetesConfig.is_configured()}")
+
+    # Start server
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(
+        "src.web_ui:app",
+        host=host,
+        port=port,
+        reload=args.reload or FeatureFlags.RELOAD,
+        log_level="debug" if args.verbose else "info"
+    )
+
+
+if __name__ == "__main__":
+    main()

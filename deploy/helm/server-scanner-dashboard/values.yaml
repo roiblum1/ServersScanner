@@ -1,0 +1,243 @@
+# Default values for server-scanner-dashboard
+# This is a YAML-formatted file.
+
+# ============================================================================
+# Application Configuration
+# ============================================================================
+replicaCount: 1
+
+image:
+  repository: quay.io/your-org/server-scanner-dashboard
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ============================================================================
+# Service Account
+# ============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ============================================================================
+# Security Context
+# ============================================================================
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+
+# ============================================================================
+# Service
+# ============================================================================
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+  annotations: {}
+
+# ============================================================================
+# Route (OpenShift)
+# ============================================================================
+route:
+  enabled: true
+  host: ""  # Leave empty for auto-generated
+  path: /
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  annotations: {}
+
+# ============================================================================
+# Ingress (Kubernetes - alternative to Route)
+# ============================================================================
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: scanner.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ============================================================================
+# Resources
+# ============================================================================
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# ============================================================================
+# Autoscaling (Horizontal Pod Autoscaler)
+# ============================================================================
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# ============================================================================
+# Probes
+# ============================================================================
+livenessProbe:
+  httpGet:
+    path: /api/cache/status
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/cache/status
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# ============================================================================
+# Persistent Volume Claim (for shared cache)
+# ============================================================================
+persistence:
+  enabled: false  # Disabled for single-pod in-memory cache
+  storageClass: ""  # Leave empty for default
+  accessMode: ReadWriteOnce  # Single pod only
+  size: 1Gi
+  annotations: {}
+  # existingClaim: ""  # Use existing PVC instead of creating new
+
+# ============================================================================
+# ConfigMap Configuration
+# ============================================================================
+config:
+  # Cache settings
+  cacheTtlSeconds: "3600"
+  backgroundScanInterval: "3600"
+
+  # Server settings
+  host: "0.0.0.0"
+  port: "8000"
+  workers: "1"
+
+  # Logging
+  logLevel: "INFO"
+
+  # Kubernetes settings
+  k8sNamespace: "assisted-installer"
+
+  # Feature flags
+  enableCaching: "true"
+  enableBackgroundScan: "true"
+  enableMetrics: "false"
+  debug: "false"
+
+# ============================================================================
+# Secrets (vendor credentials and K8s tokens)
+# ============================================================================
+secrets:
+  # HP OneView
+  oneviewIp: ""
+  oneviewUsername: ""
+  oneviewPassword: ""
+
+  # Dell OME
+  omeIp: ""
+  omeUsername: ""
+  omePassword: ""
+
+  # Cisco UCS Central
+  ucsCentralIp: ""
+  ucsCentralUsername: ""
+  ucsCentralPassword: ""
+
+  # Kubernetes
+  k8sClusterNames: ""
+  k8sDomainName: ""
+  k8sToken: ""
+
+  # Optional: Zone filtering
+  zones: ""
+
+# Use existing secret instead of creating new one
+existingSecret: ""
+
+# ============================================================================
+# Pod Configuration
+# ============================================================================
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - server-scanner-dashboard
+          topologyKey: kubernetes.io/hostname
+
+# ============================================================================
+# Pod Disruption Budget
+# ============================================================================
+podDisruptionBudget:
+  enabled: false  # Not needed for single pod
+  minAvailable: 1
+
+# ============================================================================
+# Network Policy
+# ============================================================================
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443  # HTTPS to vendor APIs
+        - protocol: TCP
+          port: 6443  # Kubernetes API
+
+# ============================================================================
+# Service Monitor (Prometheus)
+# ============================================================================
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}

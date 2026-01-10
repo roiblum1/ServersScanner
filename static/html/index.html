@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Server Scanner Dashboard - Monitor available and installed servers across zones and clusters">
+    <meta name="author" content="Server Scanner">
+    <title>Server Scanner Dashboard</title>
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖥️</text></svg>">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Theme Toggle -->
+    <div class="theme-toggle" id="themeToggle" title="Toggle light/dark mode">
+        <span class="theme-icon" id="themeIcon">☀️</span>
+    </div>
+
+    <div class="ambient" aria-hidden="true">
+        <span class="orb orb-a"></span>
+        <span class="orb orb-b"></span>
+        <span class="grid"></span>
+    </div>
+    <div class="container">
+        <!-- Header -->
+        <header class="page-header">
+            <div class="header-content">
+                <div class="header-icon">🖥️</div>
+                <div>
+                    <div class="kicker">Infrastructure Monitoring</div>
+                    <h1>Server Scanner Dashboard</h1>
+                    <p class="subtitle">Real-time visibility of servers across zones, vendors, and clusters</p>
+                </div>
+            </div>
+            <div class="header-meta">
+                <span class="meta-chip" id="cacheStatus">
+                    <span class="status-dot pulse"></span>
+                    Initializing...
+                </span>
+                <span class="meta-chip accent">
+                    <span class="status-dot"></span>
+                    Live Data
+                </span>
+            </div>
+        </header>
+
+        <!-- Summary Cards -->
+        <section class="summary" id="summary" aria-label="Summary Statistics">
+            <div class="summary-card available">
+                <div class="icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                </div>
+                <div class="number" id="availableCount">-</div>
+                <div class="label">Available Servers</div>
+            </div>
+
+            <div class="summary-card installed">
+                <div class="icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                        <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                        <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                    </svg>
+                </div>
+                <div class="number" id="installedCount">-</div>
+                <div class="label">Installed Servers</div>
+            </div>
+
+            <div class="summary-card clusters">
+                <div class="icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line>
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                        <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                    </svg>
+                </div>
+                <div class="number" id="clusterCount">-</div>
+                <div class="label">Active Clusters</div>
+            </div>
+
+            <div class="summary-card zones">
+                <div class="icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                </div>
+                <div class="number" id="zoneCount">-</div>
+                <div class="label">Configured Zones</div>
+            </div>
+        </section>
+
+        <!-- Controls -->
+        <section class="controls" aria-label="Filter Controls">
+            <div class="control-group">
+                <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.35-4.35"></path>
+                </svg>
+                <input
+                    type="text"
+                    id="zoneFilter"
+                    class="zone-input"
+                    placeholder="Filter by zones (e.g., zone-a, zone-b)"
+                    aria-label="Zone filter"
+                >
+            </div>
+            <button id="refreshBtn" class="btn-refresh" aria-label="Refresh data">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                Refresh
+            </button>
+            <button id="clearBtn" class="btn-clear" aria-label="Clear filter">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+                Clear
+            </button>
+        </section>
+
+        <!-- Zone Dashboard -->
+        <section id="zoneDashboard" class="zone-dashboard" style="display: none;" aria-label="Zone Statistics">
+            <h2 class="dashboard-title">📊 Zone Statistics</h2>
+            <div id="zoneCards" class="zone-cards"></div>
+        </section>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Zones Section -->
+            <div>
+                <!-- Loading State -->
+                <div id="loading" class="loading" aria-live="polite">
+                    Loading server data
+                </div>
+
+                <!-- Error State -->
+                <div id="error" class="error" style="display: none;" role="alert"></div>
+
+                <!-- Zones Container -->
+                <div id="zones" aria-label="Server zones"></div>
+            </div>
+
+            <!-- Cluster Panel -->
+            <aside class="cluster-panel" id="clusterPanel" style="display: none;" aria-label="Cluster information">
+                <h2>📊 Clusters</h2>
+                <div id="clusters"></div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -18,7 +18,34 @@ const state = {
     currentData: null,
     autoRefreshTimer: null,
     isLoading: false,
+    theme: localStorage.getItem('theme') || 'dark',
 };
+
+// ============================================================================
+// Theme Management
+// ============================================================================
+function initializeTheme() {
+    if (state.theme === 'light') {
+        document.body.classList.add('light-mode');
+        document.getElementById('themeIcon').textContent = '🌙';
+    } else {
+        document.body.classList.remove('light-mode');
+        document.getElementById('themeIcon').textContent = '☀️';
+    }
+}
+
+function toggleTheme() {
+    if (state.theme === 'dark') {
+        state.theme = 'light';
+        document.body.classList.add('light-mode');
+        document.getElementById('themeIcon').textContent = '🌙';
+    } else {
+        state.theme = 'dark';
+        document.body.classList.remove('light-mode');
+        document.getElementById('themeIcon').textContent = '☀️';
+    }
+    localStorage.setItem('theme', state.theme);
+}
 
 // ============================================================================
 // Initialization
@@ -28,12 +55,19 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initializeApp() {
+    initializeTheme();
     setupEventListeners();
     loadData();
     startAutoRefresh();
 }
 
 function setupEventListeners() {
+    // Theme toggle
+    const themeToggle = document.getElementById('themeToggle');
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+
     // Refresh button
     const refreshBtn = document.getElementById('refreshBtn');
     if (refreshBtn) {
@@ -92,10 +126,12 @@ async function loadData() {
         // Update UI
         updateSummary(data.summary);
         updateCacheInfo(data.cache_info);
+        renderZoneDashboard(data.zones);
         renderZones(data.zones);
         renderClusters(data.clusters);
 
         showElement(clusterPanel);
+        showElement(document.getElementById('zoneDashboard'));
         hideElement(loading);
     } catch (err) {
         hideElement(loading);
@@ -118,31 +154,30 @@ function updateSummary(summary) {
 }
 
 function updateCacheInfo(cacheInfo) {
-    // Update cache status in header meta chips
-    const headerMeta = document.querySelector('.header-meta');
-    if (!headerMeta) return;
-
-    // Remove existing cache chip if any
-    const existingChip = document.getElementById('cacheChip');
-    if (existingChip) existingChip.remove();
-
-    // Create cache chip
-    const cacheChip = document.createElement('span');
-    cacheChip.id = 'cacheChip';
-    cacheChip.className = 'meta-chip';
+    // Update the cache status chip
+    const cacheStatus = document.getElementById('cacheStatus');
+    if (!cacheStatus) return;
 
     if (cacheInfo.cached) {
         const minutes = Math.floor(cacheInfo.age_seconds / 60);
         const nextMinutes = Math.floor(cacheInfo.next_refresh_seconds / 60);
-        cacheChip.innerHTML = `🔄 Cached ${minutes}m ago (refresh in ${nextMinutes}m)`;
-        cacheChip.title = `Data from cache. Next auto-refresh in ${nextMinutes} minutes`;
-    } else {
-        cacheChip.innerHTML = `✨ Fresh scan`;
-        cacheChip.className = 'meta-chip accent';
-        cacheChip.title = 'Data from live scan (just now)';
-    }
 
-    headerMeta.appendChild(cacheChip);
+        const statusHtml = `
+            <span class="status-dot"></span>
+            Cached ${minutes}m ago
+        `;
+        cacheStatus.innerHTML = statusHtml;
+        cacheStatus.title = `Data from cache. Next auto-refresh in ${nextMinutes} minutes`;
+        cacheStatus.classList.remove('accent');
+    } else {
+        const statusHtml = `
+            <span class="status-dot pulse"></span>
+            Live Scan
+        `;
+        cacheStatus.innerHTML = statusHtml;
+        cacheStatus.title = 'Fresh data from live scan';
+        cacheStatus.classList.add('accent');
+    }
 }
 
 function animateNumber(elementId, targetValue) {
@@ -386,6 +421,115 @@ function showServerDetails(server) {
     const clusterInfo = server.cluster ? `\nCluster: ${server.cluster}` : '';
 
     alert(`${statusEmoji} ${server.name}\n\nVendor: ${server.vendor}\nZone: ${server.zone}\nStatus: ${server.status}${clusterInfo}`);
+}
+
+// ============================================================================
+// Zone Dashboard
+// ============================================================================
+function renderZoneDashboard(zones) {
+    const zoneCardsDiv = document.getElementById('zoneCards');
+    zoneCardsDiv.innerHTML = '';
+
+    zones.forEach((zone, index) => {
+        const card = createZoneDashboardCard(zone);
+        card.style.animationDelay = `${index * 50}ms`;
+        zoneCardsDiv.appendChild(card);
+    });
+}
+
+function createZoneDashboardCard(zone) {
+    const card = document.createElement('div');
+    card.className = 'zone-stat-card';
+    card.style.animation = 'fadeInUp 0.5s ease';
+
+    // Calculate statistics
+    const stats = calculateZoneDetailedStats(zone);
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'zone-stat-header';
+    header.innerHTML = `
+        <div class="zone-stat-name">📍 ${zone.zone}</div>
+        <div class="zone-stat-total">${stats.total}</div>
+    `;
+    card.appendChild(header);
+
+    // Stats Grid
+    const statsGrid = document.createElement('div');
+    statsGrid.className = 'zone-stat-grid';
+    statsGrid.innerHTML = `
+        <div class="zone-stat-item available">
+            <div class="zone-stat-label">Available</div>
+            <div class="zone-stat-value">${stats.available}</div>
+        </div>
+        <div class="zone-stat-item installed">
+            <div class="zone-stat-label">Installed</div>
+            <div class="zone-stat-value">${stats.installed}</div>
+        </div>
+    `;
+    card.appendChild(statsGrid);
+
+    // Vendor breakdown
+    if (Object.keys(stats.vendors).length > 0) {
+        const vendorsSection = document.createElement('div');
+        vendorsSection.className = 'zone-vendors';
+        vendorsSection.innerHTML = '<div class="zone-vendor-title">Vendor Distribution</div>';
+
+        const vendorBars = document.createElement('div');
+        vendorBars.className = 'zone-vendor-bars';
+
+        Object.keys(stats.vendors).sort().forEach(vendor => {
+            const count = stats.vendors[vendor];
+            const percentage = stats.total > 0 ? (count / stats.total * 100) : 0;
+
+            const bar = document.createElement('div');
+            bar.className = 'zone-vendor-bar';
+            bar.innerHTML = `
+                <div class="zone-vendor-name">${vendor}</div>
+                <div class="zone-vendor-progress">
+                    <div class="zone-vendor-fill ${vendor.toLowerCase()}" style="width: ${percentage}%"></div>
+                </div>
+                <div class="zone-vendor-count">${count}</div>
+            `;
+            vendorBars.appendChild(bar);
+        });
+
+        vendorsSection.appendChild(vendorBars);
+        card.appendChild(vendorsSection);
+    }
+
+    return card;
+}
+
+function calculateZoneDetailedStats(zone) {
+    let available = 0;
+    let installed = 0;
+    const vendors = {};
+
+    Object.keys(zone.vendors).forEach(vendor => {
+        const servers = zone.vendors[vendor];
+        let vendorCount = 0;
+
+        servers.forEach(server => {
+            vendorCount++;
+            if (server.status === 'available') {
+                available++;
+            } else {
+                installed++;
+            }
+        });
+
+        if (vendorCount > 0) {
+            vendors[vendor] = vendorCount;
+        }
+    });
+
+    return {
+        total: available + installed,
+        available,
+        installed,
+        vendors
+    };
 }
 
 // ============================================================================

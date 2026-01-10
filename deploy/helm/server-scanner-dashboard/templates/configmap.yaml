@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "server-scanner-dashboard.fullname" . }}
+  labels:
+    {{- include "server-scanner-dashboard.labels" . | nindent 4 }}
+data:
+  # Cache settings
+  CACHE_TTL_SECONDS: {{ .Values.config.cacheTtlSeconds | quote }}
+  BACKGROUND_SCAN_INTERVAL: {{ .Values.config.backgroundScanInterval | quote }}
+
+  # Server settings
+  HOST: {{ .Values.config.host | quote }}
+  PORT: {{ .Values.config.port | quote }}
+  WORKERS: {{ .Values.config.workers | quote }}
+
+  # Logging
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+
+  # Kubernetes settings
+  K8S_NAMESPACE: {{ .Values.config.k8sNamespace | quote }}
+
+  # Feature flags
+  ENABLE_CACHING: {{ .Values.config.enableCaching | quote }}
+  ENABLE_BACKGROUND_SCAN: {{ .Values.config.enableBackgroundScan | quote }}
+  ENABLE_METRICS: {{ .Values.config.enableMetrics | quote }}
+  DEBUG: {{ .Values.config.debug | quote }}
