@@ -43,12 +43,17 @@ class ZoneConfig:
 
         Returns:
             True if zone is allowed (or no zones configured), False otherwise
+
+        Note:
+            Servers with unknown zones (zone=None) are ALWAYS allowed,
+            regardless of the filter configuration. They will appear in
+            an "Unknown Zone" section in the output.
         """
         if not self.zones:  # No filter - all zones allowed
             return True
 
-        if not zone:  # Zone unknown - allow only if no filter
-            return False
+        if not zone:  # Zone unknown - ALWAYS allow (will show in "Unknown Zone")
+            return True
 
         return zone in self.zones
 
