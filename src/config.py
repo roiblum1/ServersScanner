@@ -12,10 +12,15 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # ============================================================================
-# Load default .env at module import time
+# Load default .env at module import time (only if file exists)
 # ============================================================================
 # This ensures VendorConfig and other classes can access env vars immediately
-load_dotenv()
+# In Docker/Kubernetes, environment variables are already set, so .env is optional
+if Path(".env").exists():
+    load_dotenv()
+else:
+    # In production (Docker/K8s), env vars are set directly - no .env needed
+    pass
 
 # ============================================================================
 # Environment Loading
@@ -316,9 +321,6 @@ def validate_config():
 # ============================================================================
 # Export commonly used configs
 # ============================================================================
-
-# Load environment on module import
-load_environment()
 
 # Export for convenience
 __all__ = [

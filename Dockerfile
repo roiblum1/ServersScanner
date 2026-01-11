@@ -60,5 +60,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Run application using Python module (more reliable than relying on PATH)
-CMD ["python", "-m", "uvicorn", "src.web_ui:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Run application directly with Python (web_ui.py has uvicorn.run() built-in)
+CMD ["python", "src/web_ui.py", "--host", "0.0.0.0", "--port", "8000"]
