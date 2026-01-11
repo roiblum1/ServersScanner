@@ -229,7 +229,7 @@ async def periodic_rescan():
             logger.error(f"Error in periodic rescan: {e}", exc_info=True)
 
 
-@app.on_event("startup")
+# Event handlers will be defined after app creation
 async def startup_event():
     """Start background tasks on app startup"""
     logger.info("Application starting up...")
@@ -246,17 +246,12 @@ async def startup_event():
     logger.info("Startup complete")
 
 
-# ============================================================================
-# API Endpoints
-# ============================================================================
-
-@app.get("/", response_class=HTMLResponse)
+# API endpoint functions (to be registered after app creation)
 async def read_root():
     """Serve the main HTML page"""
     return FileResponse("static/html/index.html")
 
 
-@app.get("/api/servers", response_model=DashboardData)
 async def get_servers(
     zone_filter: Optional[str] = None,
     force_refresh: bool = False
@@ -306,7 +301,6 @@ async def get_servers(
         raise HTTPException(status_code=500, detail=f"Error scanning servers: {str(e)}")
 
 
-@app.get("/api/cache/status")
 async def get_cache_status():
     """Get cache status for all keys"""
     status = {}
@@ -323,14 +317,12 @@ async def get_cache_status():
     }
 
 
-@app.post("/api/cache/clear")
 async def clear_cache():
     """Manually clear all cache"""
     await cache.clear()
     return {"status": "cache cleared"}
 
 
-@app.post("/api/scan/trigger")
 async def trigger_scan(zone_filter: Optional[str] = None):
     """Manually trigger a background scan"""
     try:
@@ -340,7 +332,6 @@ async def trigger_scan(zone_filter: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/clusters")
 async def get_clusters():
     """Get list of configured clusters"""
     cluster_names = os.getenv("K8S_CLUSTER_NAMES", "").split(",")
@@ -348,7 +339,6 @@ async def get_clusters():
     return {"clusters": clusters}
 
 
-@app.get("/api/zones")
 async def get_zones():
     """Get list of discovered zones"""
     try:
@@ -513,6 +503,18 @@ def create_app():
 
     # Mount static files
     app.mount("/static", StaticFiles(directory=AppConfig.STATIC_DIR), name="static")
+    
+    # Register event handlers
+    app.add_event_handler("startup", startup_event)
+    
+    # Register API endpoints
+    app.get("/", response_class=HTMLResponse)(read_root)
+    app.get("/api/servers", response_model=DashboardData)(get_servers)
+    app.get("/api/cache/status")(get_cache_status)
+    app.post("/api/cache/clear")(clear_cache)
+    app.post("/api/scan/trigger")(trigger_scan)
+    app.get("/api/clusters")(get_clusters)
+    app.get("/api/zones")(get_zones)
 
     return app
 
@@ -629,6 +631,24 @@ Examples:
         reload=args.reload or FeatureFlags.RELOAD,
         log_level="debug" if args.verbose else "info"
     )
+
+
+# Initialize app if not running as main (e.g., when imported by uvicorn)
+if app is None:
+    try:
+        # Load default environment
+        load_environment()
+        setup_logging()
+        validate_config()
+        create_app()
+    except Exception as init_error:
+        # If initialization fails, create a minimal app to avoid import errors
+        app = FastAPI(title="Server Scanner (Config Error)")
+        error_msg = str(init_error)
+        
+        @app.get("/")
+        async def config_error():
+            return {"error": f"Configuration error: {error_msg}"}
 
 
 if __name__ == "__main__":
