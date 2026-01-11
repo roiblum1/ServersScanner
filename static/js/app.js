@@ -548,15 +548,12 @@ function calculateZoneDetailedStats(zone) {
 }
 
 // ============================================================================
-// Auto Refresh
+// Auto Refresh (DISABLED - use manual refresh button only)
 // ============================================================================
 function startAutoRefresh() {
-    stopAutoRefresh(); // Clear any existing timer
-
-    state.autoRefreshTimer = setInterval(() => {
-        console.log('Auto-refreshing data...');
-        loadData();
-    }, CONFIG.AUTO_REFRESH_INTERVAL);
+    // Auto-refresh disabled - too annoying for infrastructure monitoring
+    // Users can manually refresh using the refresh button
+    console.log('Auto-refresh is disabled. Use the refresh button to update data.');
 }
 
 function stopAutoRefresh() {
@@ -566,15 +563,15 @@ function stopAutoRefresh() {
     }
 }
 
-// Stop auto-refresh when page is hidden (battery/performance optimization)
-document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-        stopAutoRefresh();
-    } else {
-        startAutoRefresh();
-        loadData(); // Refresh immediately when page becomes visible
-    }
-});
+// Removed auto-refresh on visibility change - users prefer manual control
+// document.addEventListener('visibilitychange', () => {
+//     if (document.hidden) {
+//         stopAutoRefresh();
+//     } else {
+//         startAutoRefresh();
+//         loadData();
+//     }
+// });
 
 // ============================================================================
 // Export for testing
