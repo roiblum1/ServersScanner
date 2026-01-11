@@ -37,6 +37,9 @@ RUN useradd -m -s /bin/bash scanner && \
 # Set working directory
 WORKDIR /app
 
+# Add local bin to PATH (before switching user)
+ENV PATH=/home/scanner/.local/bin:$PATH
+
 # Copy Python dependencies from builder
 COPY --from=builder /root/.local /home/scanner/.local
 
@@ -45,9 +48,6 @@ COPY --chown=scanner:scanner . .
 
 # Switch to non-root user
 USER scanner
-
-# Add local bin to PATH
-ENV PATH=/home/scanner/.local/bin:$PATH
 
 # Expose port
 EXPOSE 8000
@@ -60,5 +60,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Run application
-CMD ["uvicorn", "src.web_ui:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Run application using Python module (more reliable than relying on PATH)
+CMD ["python", "-m", "uvicorn", "src.web_ui:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
