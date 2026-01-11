@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 FastAPI Web UI for Server Scanner
 
@@ -14,6 +15,7 @@ import os
 import sys
 import asyncio
 import argparse
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -21,6 +23,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 import logging
+
+# Fix imports when running as script (python src/web_ui.py)
+if __name__ == "__main__" and __package__ is None:
+    # Add parent directory to path
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+    __package__ = "src"
 
 from src.config import (
     AppConfig,

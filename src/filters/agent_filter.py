@@ -186,6 +186,16 @@ class AgentFilter:
         """
         Extract hostname and requestedHostname from Agent resource.
 
+        Priority order:
+        1. spec.hostname (preferred)
+        2. spec.requestedHostname (if spec.hostname is MAC address)
+        3. status.inventory.hostname (fallback)
+        4. status.requestedHostname (fallback)
+
+        The hostname parser will handle MAC address detection:
+        - If hostname contains MAC address → use requestedHostname
+        - Otherwise → use hostname
+
         Args:
             agent: Agent resource dict
 
@@ -193,11 +203,20 @@ class AgentFilter:
             Tuple of (hostname, requestedHostname)
         """
         status = agent.get("status", {})
+        spec = agent.get("spec", {})
         inventory = status.get("inventory", {})
 
-        hostname = inventory.get("hostname")
-        requested_hostname = status.get("requestedHostname")
+        # Priority order for hostname:
+        # 1. spec.hostname (primary source)
+        # 2. status.inventory.hostname (fallback)
+        hostname = spec.get("hostname") or inventory.get("hostname")
 
+        # Priority order for requestedHostname:
+        # 1. spec.requestedHostname (primary source)
+        # 2. status.requestedHostname (fallback)
+        requested_hostname = spec.get("requestedHostname") or status.get("requestedHostname")
+
+        logger.debug(f"Agent hostnames - hostname: {hostname}, requestedHostname: {requested_hostname}")
         return hostname, requested_hostname
 
     def _handle_api_exception(self, e: ApiException, cluster_name: str, cluster_index: int):

@@ -366,23 +366,13 @@ function createClusterElement(cluster) {
 
     const count = document.createElement('div');
     count.className = 'cluster-count';
-    count.innerHTML = `<strong>${cluster.installed_count}</strong> servers installed`;
+    count.innerHTML = `<strong>${cluster.installed_count}</strong> servers`;
 
     div.appendChild(name);
     div.appendChild(count);
 
-    if (cluster.servers.length > 0) {
-        const serversDiv = document.createElement('div');
-        serversDiv.className = 'cluster-servers';
-
-        cluster.servers.forEach(serverName => {
-            const serverItem = document.createElement('div');
-            serverItem.textContent = `• ${serverName}`;
-            serversDiv.appendChild(serverItem);
-        });
-
-        div.appendChild(serversDiv);
-    }
+    // Don't show individual server names - just the total count
+    // This keeps the UI clean when there are 400+ servers
 
     return div;
 }

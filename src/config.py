@@ -12,6 +12,12 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # ============================================================================
+# Load default .env at module import time
+# ============================================================================
+# This ensures VendorConfig and other classes can access env vars immediately
+load_dotenv()
+
+# ============================================================================
 # Environment Loading
 # ============================================================================
 
@@ -25,13 +31,13 @@ def load_environment(env_file: Optional[str] = None):
     if env_file:
         env_path = Path(env_file)
         if env_path.exists():
-            load_dotenv(env_path)
-            logger.info(f"Loaded environment from: {env_file}")
+            load_dotenv(env_path, override=True)
+            logging.getLogger(__name__).info(f"Loaded environment from: {env_file}")
         else:
-            logger.warning(f"Environment file not found: {env_file}")
+            logging.getLogger(__name__).warning(f"Environment file not found: {env_file}")
     else:
-        # Load from default .env in current directory
-        load_dotenv()
+        # Reload default .env
+        load_dotenv(override=True)
 
 
 # ============================================================================

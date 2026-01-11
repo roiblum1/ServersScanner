@@ -25,7 +25,16 @@ Usage:
 import argparse
 import logging
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Fix imports when running as script (python src/scan_servers.py)
+if __name__ == "__main__" and __package__ is None:
+    # Add parent directory to path
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+    __package__ = "src"
 
 from src.services import ScannerService
 from src.services.scanner_service import initialize_scanner
