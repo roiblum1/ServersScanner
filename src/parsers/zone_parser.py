@@ -3,9 +3,9 @@ Zone parser for extracting zone names from server profile names.
 
 Examples:
 - ocp4-hypershift-zone-a-01 → zone-a
-- ocp4-hypershift-data-zone-b-01 → zone-b
-- ocp4-hypershift-h100-zone-c-01 → zone-c
-- ocp4-hypershift-v100-zone-d-01 → zone-d
+- ocp4-hypershift-data-zone-b-01 → zone-b (data prefix)
+- ocp4-hypershift-h100-zone-c-01 → zone-c (GPU prefix)
+- ocp4-hypershift-zone-d-v100-01 → zone-d (GPU suffix)
 - ocp4-hypershift-zone-e-l4-01 → zone-e
 """
 
@@ -19,20 +19,28 @@ class ZoneParser:
 
     Handles various patterns:
     - ocp4-hypershift-<zone>-<number>
-    - ocp4-hypershift-data-<zone>-<number>
-    - ocp4-hypershift-h100-<zone>-<number>
-    - ocp4-hypershift-v100-<zone>-<number>
+    - ocp4-hypershift-data-<zone>-<number> (data prefix)
+    - ocp4-hypershift-{v100,h100,a100,h200}-<zone>-<number> (GPU prefix)
+    - ocp4-hypershift-<zone>-data-<number> (data suffix)
+    - ocp4-hypershift-<zone>-{v100,h100,a100,h200}-<number> (GPU suffix)
     - ocp4-hypershift-<zone>-l4-<number>
     """
 
     # Patterns to extract zone (ordered by specificity)
     ZONE_PATTERNS = [
+        # PREFIX PATTERNS (type before zone)
         # Pattern: ocp4-hypershift-data-<zone>-<anything>
         re.compile(r'ocp4-hypershift-data-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),
-        # Pattern: ocp4-hypershift-h100-<zone>-<anything>
-        re.compile(r'ocp4-hypershift-h100-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),
-        # Pattern: ocp4-hypershift-v100-<zone>-<anything>
-        re.compile(r'ocp4-hypershift-v100-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),
+        # Pattern: ocp4-hypershift-{v100,h100,a100,h200}-<zone>-<anything>
+        re.compile(r'ocp4-hypershift-(?:v100|h100|a100|h200)-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),
+
+        # SUFFIX PATTERNS (type after zone)
+        # Pattern: ocp4-hypershift-<zone>-data-<number>
+        re.compile(r'ocp4-hypershift-([a-zA-Z0-9\-]+?)-data-\d+', re.IGNORECASE),
+        # Pattern: ocp4-hypershift-<zone>-{v100,h100,a100,h200}-<number>
+        re.compile(r'ocp4-hypershift-([a-zA-Z0-9\-]+?)-(?:v100|h100|a100|h200)-\d+', re.IGNORECASE),
+
+        # GENERIC PATTERNS
         # Pattern: ocp4-hypershift-<zone>-<number or l4>
         re.compile(r'ocp4-hypershift-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),
         # Fallback: anything between ocp4-hypershift- and next hyphen followed by number
@@ -57,10 +65,12 @@ class ZoneParser:
             'zone-b'
             >>> ZoneParser.extract_zone('ocp4-hypershift-h100-zone-c-01')
             'zone-c'
-            >>> ZoneParser.extract_zone('ocp4-hypershift-v100-zone-d-01')
+            >>> ZoneParser.extract_zone('ocp4-hypershift-zone-d-v100-01')
             'zone-d'
-            >>> ZoneParser.extract_zone('ocp4-hypershift-zone-e-l4-01')
-            'zone-e'
+            >>> ZoneParser.extract_zone('ocp4-hypershift-doil-a100-17')
+            'doil'
+            >>> ZoneParser.extract_zone('ocp4-hypershift-h200-ams-05')
+            'ams'
         """
         if not server_name:
             return None
