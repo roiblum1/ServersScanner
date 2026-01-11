@@ -7,7 +7,7 @@
 // Configuration
 // ============================================================================
 const CONFIG = {
-    AUTO_REFRESH_INTERVAL: 30000, // 30 seconds
+    AUTO_REFRESH_INTERVAL: 300000, // 5 minutes (servers don't change frequently)
     ANIMATION_DELAY: 50, // Stagger animation delay
 };
 
@@ -207,14 +207,16 @@ function animateNumber(elementId, targetValue) {
 function renderZones(zones) {
     const zonesDiv = document.getElementById('zones');
 
-    zones.forEach((zone, index) => {
+    // Use DocumentFragment for better performance
+    const fragment = document.createDocumentFragment();
+
+    zones.forEach((zone) => {
         const zoneDiv = createZoneElement(zone);
-
-        // Stagger animation
-        zoneDiv.style.animationDelay = `${index * CONFIG.ANIMATION_DELAY}ms`;
-
-        zonesDiv.appendChild(zoneDiv);
+        fragment.appendChild(zoneDiv);
     });
+
+    // Single DOM update instead of multiple
+    zonesDiv.appendChild(fragment);
 }
 
 function createZoneElement(zone) {
@@ -228,14 +230,35 @@ function createZoneElement(zone) {
     const header = createZoneHeader(zone, stats);
     zoneDiv.appendChild(header);
 
+    // Create content wrapper for collapse functionality
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'zone-content';
+
     // Create vendor sections
     Object.keys(zone.vendors).sort().forEach(vendor => {
         const servers = zone.vendors[vendor];
         if (servers.length === 0) return;
 
         const vendorSection = createVendorSection(vendor, servers);
-        zoneDiv.appendChild(vendorSection);
+        contentDiv.appendChild(vendorSection);
     });
+
+    zoneDiv.appendChild(contentDiv);
+
+    // Add collapse functionality
+    header.addEventListener('click', () => {
+        zoneDiv.classList.toggle('collapsed');
+        // Save collapse state to localStorage
+        const collapseStates = JSON.parse(localStorage.getItem('zoneCollapseStates') || '{}');
+        collapseStates[zone.zone] = zoneDiv.classList.contains('collapsed');
+        localStorage.setItem('zoneCollapseStates', JSON.stringify(collapseStates));
+    });
+
+    // Restore collapse state from localStorage
+    const collapseStates = JSON.parse(localStorage.getItem('zoneCollapseStates') || '{}');
+    if (collapseStates[zone.zone]) {
+        zoneDiv.classList.add('collapsed');
+    }
 
     return zoneDiv;
 }
@@ -246,7 +269,7 @@ function createZoneHeader(zone, stats) {
 
     const title = document.createElement('div');
     title.className = 'zone-title';
-    title.innerHTML = `📍 ${zone.zone}`;
+    title.innerHTML = `<span class="collapse-icon">▼</span> 📍 ${zone.zone}`;
 
     const statsDiv = document.createElement('div');
     statsDiv.className = 'zone-stats';
@@ -293,11 +316,13 @@ function createVendorSection(vendor, servers) {
     const grid = document.createElement('div');
     grid.className = 'server-grid';
 
-    servers.forEach((server, index) => {
+    // Use DocumentFragment for batch DOM updates
+    const fragment = document.createDocumentFragment();
+    servers.forEach((server) => {
         const card = createServerCard(server);
-        card.style.animationDelay = `${index * 30}ms`;
-        grid.appendChild(card);
+        fragment.appendChild(card);
     });
+    grid.appendChild(fragment);
 
     section.appendChild(title);
     section.appendChild(grid);
