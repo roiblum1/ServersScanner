@@ -433,11 +433,14 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
                 status = "available"
                 cluster = None
 
-                if profile.name in all_installed:
+                # Normalize for case-insensitive comparison
+                normalized_name = profile.name.lower().strip()
+
+                if normalized_name in all_installed:
                     status = "installed"
                     # Find which cluster
                     for cluster_name, servers in installed_by_cluster.items():
-                        if profile.name in servers:
+                        if normalized_name in servers:
                             cluster = cluster_name
                             break
 

@@ -201,8 +201,9 @@ class ScannerService:
 
                 # Filter and enrich profiles
                 for profile in profiles:
-                    # Skip if installed
-                    if filter_installed and profile.name in installed_servers:
+                    # Skip if installed (case-insensitive comparison)
+                    normalized_profile_name = profile.name.lower().strip()
+                    if filter_installed and normalized_profile_name in installed_servers:
                         logger.debug(f"Skipping installed server: {profile.name}")
                         continue
 

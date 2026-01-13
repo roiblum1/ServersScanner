@@ -169,8 +169,10 @@ class AgentFilter:
                     server_name = self._hostname_parser.extract_hostname(hostname, requested_hostname)
 
                     if server_name:
-                        server_names.add(server_name)
-                        logger.debug(f"Found Agent with server name: {server_name}")
+                        # Normalize to lowercase for case-insensitive comparison
+                        normalized_name = server_name.lower().strip()
+                        server_names.add(normalized_name)
+                        logger.debug(f"Found Agent with server name: {server_name} (normalized: {normalized_name})")
 
             except ApiException as e:
                 self._handle_api_exception(e, cluster_name, cluster_index)
