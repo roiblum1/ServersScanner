@@ -161,6 +161,81 @@
         </main>
     </div>
 
+    <!-- Maintenance Modal -->
+    <div id="maintenanceModal" class="modal" style="display: none;">
+        <div class="modal-backdrop" onclick="closeMaintenanceModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Server Maintenance</h2>
+                <button class="modal-close" onclick="closeMaintenanceModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Form for NEW maintenance -->
+                <div id="maintenanceForm" style="display: none;">
+                    <div class="form-group">
+                        <label for="maintenanceReason">Reason *</label>
+                        <textarea
+                            id="maintenanceReason"
+                            placeholder="e.g., NIC not working, firmware update needed..."
+                            rows="4"
+                            maxlength="500"
+                            required
+                        ></textarea>
+                        <div class="char-count">
+                            <span id="reasonCharCount">0</span> / 500
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="maintenanceSeverity">Severity *</label>
+                        <select id="maintenanceSeverity" required>
+                            <option value="low">Low - Minor issue</option>
+                            <option value="medium" selected>Medium - Needs attention</option>
+                            <option value="high">High - Urgent</option>
+                            <option value="critical">Critical - Immediate</option>
+                        </select>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn-primary" onclick="submitMaintenance()">
+                            Set Maintenance
+                        </button>
+                        <button class="btn-secondary" onclick="closeMaintenanceModal()">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- View for EXISTING maintenance -->
+                <div id="maintenanceView" style="display: none;">
+                    <div class="maintenance-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Reason:</span>
+                            <p id="viewReason" class="detail-value"></p>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Severity:</span>
+                            <span id="viewSeverity" class="severity-badge"></span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Set On:</span>
+                            <span id="viewTimestamp" class="detail-value"></span>
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn-danger" onclick="removeMaintenance()">
+                            Remove Maintenance
+                        </button>
+                        <button class="btn-secondary" onclick="closeMaintenanceModal()">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript -->
     <script src="/static/js/app.js"></script>
 </body>

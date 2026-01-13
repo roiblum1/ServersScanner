@@ -45,6 +45,7 @@ from src.config import (
 from src.services.scanner_service import initialize_scanner
 from src.models import ServerProfile
 from src.filters import AgentFilter
+from src.storage import MaintenanceStore, MaintenanceRecord
 
 # Logger will be configured later
 logger = logging.getLogger(__name__)
@@ -125,19 +126,31 @@ class DataCache:
 # Global cache instance
 cache = DataCache()
 
+# Global maintenance store instance
+maintenance_store = MaintenanceStore(data_dir=Path("/app/data"))
+
 
 # ============================================================================
 # Data Models
 # ============================================================================
+
+class MaintenanceInfo(BaseModel):
+    """Maintenance record for a server"""
+    reason: str
+    severity: str  # "critical" | "high" | "medium" | "low"
+    timestamp: str
+    created_by: Optional[str] = None
+
 
 class ServerInfo(BaseModel):
     """Server information with installation status"""
     name: str
     vendor: str
     zone: Optional[str]
-    status: str  # "available" or "installed"
+    status: str  # "available", "installed", or "maintenance"
     cluster: Optional[str] = None  # Which management cluster the agent is on
     deployment_cluster: Optional[str] = None  # Which cluster the agent is deployed to
+    maintenance: Optional[MaintenanceInfo] = None  # Maintenance details if in maintenance mode
 
 
 class ZoneData(BaseModel):
@@ -212,7 +225,7 @@ async def scan_and_cache(zone_filter: Optional[str] = None) -> DashboardData:
         agent_details = get_agent_details_map()
 
         # Build dashboard data
-        dashboard_data = build_dashboard_data(all_results, installed_by_cluster, agent_details)
+        dashboard_data = await build_dashboard_data(all_results, installed_by_cluster, agent_details)
 
         # Store in cache
         await cache.set(cache_key, dashboard_data)
@@ -247,6 +260,13 @@ async def periodic_rescan():
 async def startup_event():
     """Start background tasks on app startup"""
     logger.info("Application starting up...")
+
+    # Initialize maintenance store
+    logger.info("Initializing maintenance store...")
+    try:
+        await maintenance_store.initialize()
+    except Exception as e:
+        logger.error(f"Maintenance store initialization failed: {e}")
 
     # Initial scan to populate cache
     logger.info("Performing initial scan...")
@@ -371,6 +391,92 @@ async def get_zones():
         raise HTTPException(status_code=500, detail=f"Error getting zones: {str(e)}")
 
 
+async def set_maintenance(server_name: str, maintenance: MaintenanceInfo):
+    """
+    Set server to maintenance mode.
+
+    Args:
+        server_name: Server profile name
+        maintenance: Maintenance information (reason, severity, timestamp)
+
+    Returns:
+        Success status
+    """
+    try:
+        # Validate severity
+        valid_severities = ["critical", "high", "medium", "low"]
+        if maintenance.severity.lower() not in valid_severities:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid severity. Must be one of: {', '.join(valid_severities)}"
+            )
+
+        # Store maintenance record
+        record = MaintenanceRecord(**maintenance.dict())
+        await maintenance_store.set_maintenance(server_name, record)
+
+        # Clear cache to trigger refresh
+        await cache.clear()
+
+        return {"status": "success", "server": server_name}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting maintenance for {server_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error setting maintenance: {str(e)}")
+
+
+async def remove_maintenance(server_name: str):
+    """
+    Remove maintenance status from server.
+
+    Args:
+        server_name: Server profile name
+
+    Returns:
+        Success status
+    """
+    try:
+        await maintenance_store.remove_maintenance(server_name)
+
+        # Clear cache to trigger refresh
+        await cache.clear()
+
+        return {"status": "removed", "server": server_name}
+
+    except Exception as e:
+        logger.error(f"Error removing maintenance for {server_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error removing maintenance: {str(e)}")
+
+
+async def get_server_details(server_name: str):
+    """
+    Get details for a single server including maintenance status.
+
+    Args:
+        server_name: Server profile name
+
+    Returns:
+        Server details with maintenance info if applicable
+    """
+    try:
+        # Get maintenance info
+        maintenance = await maintenance_store.get_maintenance(server_name)
+
+        # Build response
+        response = {
+            "name": server_name,
+            "maintenance": maintenance.dict() if maintenance else None
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error getting server details for {server_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting server details: {str(e)}")
+
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -439,7 +545,7 @@ def get_agent_details_map():
     return agent_filter.get_agent_details()
 
 
-def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]], agent_details: Dict = None) -> DashboardData:
+async def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]], agent_details: Dict = None) -> DashboardData:
     """
     Build dashboard data structure.
 
@@ -453,6 +559,10 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
     """
     if agent_details is None:
         agent_details = {}
+
+    # Load ALL maintenance records once for efficiency
+    maintenance_records = await maintenance_store.get_all_maintenance()
+
     # Flatten installed servers to set for quick lookup
     all_installed = set()
     for servers in installed_by_cluster.values():
@@ -472,11 +582,16 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
                 status = "available"
                 cluster = None
                 deployment_cluster = None
+                maintenance_info = None
 
                 # Normalize for case-insensitive comparison
                 normalized_name = profile.name.lower().strip()
 
-                if normalized_name in all_installed:
+                # Check maintenance FIRST (highest priority)
+                if normalized_name in maintenance_records:
+                    status = "maintenance"
+                    maintenance_info = maintenance_records[normalized_name]
+                elif normalized_name in all_installed:
                     status = "installed"
                     # Find which management cluster
                     for cluster_name, servers in installed_by_cluster.items():
@@ -495,7 +610,8 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
                     zone=zone,
                     status=status,
                     cluster=cluster,
-                    deployment_cluster=deployment_cluster
+                    deployment_cluster=deployment_cluster,
+                    maintenance=MaintenanceInfo(**maintenance_info.dict()) if maintenance_info else None
                 ))
 
             vendors_data[vendor] = servers_info
@@ -574,6 +690,11 @@ def create_app():
     app.post("/api/scan/trigger")(trigger_scan)
     app.get("/api/clusters")(get_clusters)
     app.get("/api/zones")(get_zones)
+
+    # Maintenance endpoints
+    app.put("/api/servers/{server_name}/maintenance")(set_maintenance)
+    app.delete("/api/servers/{server_name}/maintenance")(remove_maintenance)
+    app.get("/api/servers/{server_name}")(get_server_details)
 
     return app
 

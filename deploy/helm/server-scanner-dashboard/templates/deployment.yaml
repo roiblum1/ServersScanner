@@ -49,14 +49,14 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- if .Values.persistence.enabled }}
           volumeMounts:
-            - name: cache
-              mountPath: /app/cache
+            - name: data
+              mountPath: /app/data
           {{- end }}
       {{- if .Values.persistence.enabled }}
       volumes:
-        - name: cache
+        - name: data
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-cache" (include "server-scanner-dashboard.fullname" .)) }}
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "server-scanner-dashboard.fullname" .)) }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

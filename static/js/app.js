@@ -435,14 +435,8 @@ function hideElement(element) {
 }
 
 function showServerDetails(server) {
-    // Could open a modal with more details in the future
-    console.log('Server details:', server);
-
-    // For now, show a simple alert
-    const statusEmoji = server.status === 'available' ? '✅' : '❌';
-    const clusterInfo = server.cluster ? `\nCluster: ${server.cluster}` : '';
-
-    alert(`${statusEmoji} ${server.name}\n\nVendor: ${server.vendor}\nZone: ${server.zone}\nStatus: ${server.status}${clusterInfo}`);
+    // Open maintenance modal instead of alert
+    showMaintenanceModal(server);
 }
 
 // ============================================================================
@@ -553,6 +547,131 @@ function calculateZoneDetailedStats(zone) {
         vendors
     };
 }
+
+// ============================================================================
+// Maintenance Modal Management
+// ============================================================================
+let currentServer = null;
+
+function showMaintenanceModal(server) {
+    currentServer = server;
+    const modal = document.getElementById('maintenanceModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const form = document.getElementById('maintenanceForm');
+    const view = document.getElementById('maintenanceView');
+
+    modalTitle.textContent = `${server.name} - Maintenance`;
+
+    if (server.maintenance) {
+        // Show existing maintenance details
+        form.style.display = 'none';
+        view.style.display = 'block';
+        populateMaintenanceView(server.maintenance);
+    } else {
+        // Show form to set new maintenance
+        form.style.display = 'block';
+        view.style.display = 'none';
+        resetMaintenanceForm();
+    }
+
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeMaintenanceModal() {
+    const modal = document.getElementById('maintenanceModal');
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+    currentServer = null;
+}
+
+function resetMaintenanceForm() {
+    document.getElementById('maintenanceReason').value = '';
+    document.getElementById('maintenanceSeverity').value = 'medium';
+    document.getElementById('reasonCharCount').textContent = '0';
+}
+
+function populateMaintenanceView(maintenance) {
+    document.getElementById('viewReason').textContent = maintenance.reason;
+
+    const severityBadge = document.getElementById('viewSeverity');
+    severityBadge.textContent = maintenance.severity.toUpperCase();
+    severityBadge.className = `severity-badge ${maintenance.severity}`;
+
+    const timestamp = new Date(maintenance.timestamp);
+    document.getElementById('viewTimestamp').textContent = timestamp.toLocaleString();
+}
+
+async function submitMaintenance() {
+    const reason = document.getElementById('maintenanceReason').value.trim();
+    const severity = document.getElementById('maintenanceSeverity').value;
+
+    if (!reason) {
+        alert('Please provide a reason for maintenance');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/servers/${encodeURIComponent(currentServer.name)}/maintenance`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                reason: reason,
+                severity: severity,
+                timestamp: new Date().toISOString(),
+                created_by: null
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || `HTTP ${response.status}`);
+        }
+
+        closeMaintenanceModal();
+        loadData(); // Refresh dashboard
+    } catch (err) {
+        alert(`Error setting maintenance: ${err.message}`);
+    }
+}
+
+async function removeMaintenance() {
+    if (!confirm(`Remove maintenance status from ${currentServer.name}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/servers/${encodeURIComponent(currentServer.name)}/maintenance`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        closeMaintenanceModal();
+        loadData(); // Refresh dashboard
+    } catch (err) {
+        alert(`Error removing maintenance: ${err.message}`);
+    }
+}
+
+// Character counter for reason textarea
+document.addEventListener('DOMContentLoaded', () => {
+    const reasonInput = document.getElementById('maintenanceReason');
+    if (reasonInput) {
+        reasonInput.addEventListener('input', (e) => {
+            document.getElementById('reasonCharCount').textContent = e.target.value.length;
+        });
+    }
+
+    // ESC key to close modal
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && currentServer) {
+            closeMaintenanceModal();
+        }
+    });
+});
 
 // ============================================================================
 // Auto Refresh (DISABLED - use manual refresh button only)

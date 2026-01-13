@@ -118,13 +118,13 @@ readinessProbe:
   failureThreshold: 3
 
 # ============================================================================
-# Persistent Volume Claim (for shared cache)
+# Persistent Volume Claim (for maintenance data storage)
 # ============================================================================
 persistence:
-  enabled: false  # Disabled for single-pod in-memory cache
-  storageClass: ""  # Leave empty for default
-  accessMode: ReadWriteOnce  # Single pod only
-  size: 1Gi
+  enabled: true  # Enabled for persistent maintenance data
+  storageClass: ""  # Leave empty for default, or specify: "nfs-client", "efs-sc", etc.
+  accessMode: ReadWriteMany  # Multi-pod support for maintenance data
+  size: 1Gi  # Sufficient for maintenance records
   annotations: {}
   # existingClaim: ""  # Use existing PVC instead of creating new
 

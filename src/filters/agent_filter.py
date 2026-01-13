@@ -161,7 +161,7 @@ class AgentFilter:
             cluster_token = self.config.get_token_for_cluster(cluster_index)
             if not cluster_token:
                 logger.error(f"No token available for cluster {cluster_name}")
-                return server_names
+                return agents
 
             # Configure token authentication
             configuration.api_key = {"authorization": f"Bearer {cluster_token}"}
