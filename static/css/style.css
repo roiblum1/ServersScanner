@@ -857,6 +857,13 @@ h1 {
     color: var(--text-muted);
 }
 
+.server-deployment {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    margin-top: 2px;
+}
+
 /* ============================================================================
    Cluster Panel
    ============================================================================ */

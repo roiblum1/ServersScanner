@@ -136,7 +136,8 @@ class ServerInfo(BaseModel):
     vendor: str
     zone: Optional[str]
     status: str  # "available" or "installed"
-    cluster: Optional[str] = None  # Which cluster it's installed in
+    cluster: Optional[str] = None  # Which management cluster the agent is on
+    deployment_cluster: Optional[str] = None  # Which cluster the agent is deployed to
 
 
 class ZoneData(BaseModel):
@@ -207,8 +208,11 @@ async def scan_and_cache(zone_filter: Optional[str] = None) -> DashboardData:
         logger.info("Querying Kubernetes for installed servers...")
         installed_by_cluster = get_installed_servers_by_cluster()
 
+        # Get agent details (including deployment clusters)
+        agent_details = get_agent_details_map()
+
         # Build dashboard data
-        dashboard_data = build_dashboard_data(all_results, installed_by_cluster)
+        dashboard_data = build_dashboard_data(all_results, installed_by_cluster, agent_details)
 
         # Store in cache
         await cache.set(cache_key, dashboard_data)
@@ -403,17 +407,52 @@ def get_installed_servers_by_cluster() -> Dict[str, List[str]]:
     return agent_filter.get_installed_servers_by_cluster()
 
 
-def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]) -> DashboardData:
+def get_agent_details_map():
+    """
+    Query Kubernetes to get detailed agent information including deployment clusters.
+
+    Returns:
+        Dict mapping server name to AgentInfo
+    """
+    from src.filters import AgentConfig
+
+    # Get cluster configuration
+    cluster_names_str = os.getenv("K8S_CLUSTER_NAMES")
+    domain_name = os.getenv("K8S_DOMAIN_NAME")
+    token = os.getenv("K8S_TOKEN")
+    namespace = os.getenv("K8S_NAMESPACE", "assisted-installer")
+
+    if not all([cluster_names_str, domain_name, token]):
+        return {}
+
+    # Create agent filter
+    agent_config = AgentConfig(
+        cluster_names=cluster_names_str,
+        domain_name=domain_name,
+        token=token,
+        namespace=namespace
+    )
+
+    agent_filter = AgentFilter(agent_config)
+
+    # Get detailed agent information
+    return agent_filter.get_agent_details()
+
+
+def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]], agent_details: Dict = None) -> DashboardData:
     """
     Build dashboard data structure.
 
     Args:
         all_results: ScanResults with all servers
         installed_by_cluster: Dict mapping cluster to installed server names
+        agent_details: Dict mapping server name to AgentInfo (optional)
 
     Returns:
         DashboardData ready for frontend
     """
+    if agent_details is None:
+        agent_details = {}
     # Flatten installed servers to set for quick lookup
     all_installed = set()
     for servers in installed_by_cluster.values():
@@ -432,24 +471,31 @@ def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]]
                 # Determine status and cluster
                 status = "available"
                 cluster = None
+                deployment_cluster = None
 
                 # Normalize for case-insensitive comparison
                 normalized_name = profile.name.lower().strip()
 
                 if normalized_name in all_installed:
                     status = "installed"
-                    # Find which cluster
+                    # Find which management cluster
                     for cluster_name, servers in installed_by_cluster.items():
                         if normalized_name in servers:
                             cluster = cluster_name
                             break
+
+                    # Get deployment cluster from agent details
+                    if normalized_name in agent_details:
+                        agent_info = agent_details[normalized_name]
+                        deployment_cluster = agent_info.deployment_cluster
 
                 servers_info.append(ServerInfo(
                     name=profile.name,
                     vendor=vendor,
                     zone=zone,
                     status=status,
-                    cluster=cluster
+                    cluster=cluster,
+                    deployment_cluster=deployment_cluster
                 ))
 
             vendors_data[vendor] = servers_info

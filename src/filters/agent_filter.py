@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class AgentInfo:
+    """
+    Information about an installed agent.
+
+    Attributes:
+        server_name: Normalized server hostname
+        management_cluster: Which management cluster this agent is on
+        deployment_cluster: Which cluster the agent is deployed to (from clusterDeploymentName)
+    """
+    server_name: str
+    management_cluster: str
+    deployment_cluster: Optional[str] = None
+
+
+@dataclass
 class AgentConfig:
     """
     Kubernetes Agent filter configuration.
@@ -108,10 +123,12 @@ class AgentFilter:
             logger.info(f"Querying cluster: {cluster_name} at {api_server}")
 
             try:
-                agent_names = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
-                if agent_names:
-                    logger.info(f"Found {len(agent_names)} Agent resources in cluster '{cluster_name}'")
-                    self._installed_servers.update(agent_names)
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                if agents:
+                    logger.info(f"Found {len(agents)} Agent resources in cluster '{cluster_name}'")
+                    # Extract just the server names for the set
+                    server_names = {agent.server_name for agent in agents}
+                    self._installed_servers.update(server_names)
                 else:
                     logger.info(f"No Agent resources found in cluster '{cluster_name}'")
             except Exception as e:
@@ -120,7 +137,7 @@ class AgentFilter:
         logger.info(f"Total installed servers across all clusters: {len(self._installed_servers)}")
         return self._installed_servers
 
-    def _get_agents_from_cluster(self, api_server: str, cluster_name: str, cluster_index: int) -> Set[str]:
+    def _get_agents_from_cluster(self, api_server: str, cluster_name: str, cluster_index: int) -> List[AgentInfo]:
         """
         Query Agent resources from a specific cluster.
 
@@ -130,9 +147,9 @@ class AgentFilter:
             cluster_index: Index of cluster (for per-cluster tokens)
 
         Returns:
-            Set of extracted server names
+            List of AgentInfo objects with server details
         """
-        server_names = set()
+        agents = []
 
         try:
             # Create cluster-specific configuration
@@ -163,7 +180,7 @@ class AgentFilter:
                     _request_timeout=30
                 )
 
-                # Extract hostnames from Agent resources
+                # Extract information from Agent resources
                 for item in agent_list.get("items", []):
                     hostname, requested_hostname = self._extract_agent_hostnames(item)
                     server_name = self._hostname_parser.extract_hostname(hostname, requested_hostname)
@@ -171,8 +188,22 @@ class AgentFilter:
                     if server_name:
                         # Normalize to lowercase for case-insensitive comparison
                         normalized_name = server_name.lower().strip()
-                        server_names.add(normalized_name)
-                        logger.debug(f"Found Agent with server name: {server_name} (normalized: {normalized_name})")
+
+                        # Extract cluster deployment name from spec.clusterDeploymentName.name
+                        spec = item.get("spec", {})
+                        cluster_deployment = spec.get("clusterDeploymentName", {})
+                        deployment_cluster_name = cluster_deployment.get("name") if isinstance(cluster_deployment, dict) else None
+
+                        agent_info = AgentInfo(
+                            server_name=normalized_name,
+                            management_cluster=cluster_name,
+                            deployment_cluster=deployment_cluster_name
+                        )
+                        agents.append(agent_info)
+                        logger.debug(
+                            f"Found Agent: {server_name} (normalized: {normalized_name}) "
+                            f"on cluster '{cluster_name}', deployed to: {deployment_cluster_name or 'N/A'}"
+                        )
 
             except ApiException as e:
                 self._handle_api_exception(e, cluster_name, cluster_index)
@@ -182,7 +213,7 @@ class AgentFilter:
         except Exception as e:
             logger.error(f"Error connecting to cluster '{cluster_name}': {type(e).__name__}: {e}")
 
-        return server_names
+        return agents
 
     def _extract_agent_hostnames(self, agent: dict) -> tuple[Optional[str], Optional[str]]:
         """
@@ -246,9 +277,39 @@ class AgentFilter:
                 f"{e.status} - {e.reason}"
             )
 
+    def get_agent_details(self) -> Dict[str, AgentInfo]:
+        """
+        Get detailed agent information including deployment clusters.
+
+        Returns:
+            Dict mapping server name to AgentInfo
+        """
+        result = {}
+        cluster_list = [c.strip() for c in self.config.cluster_names.split(',')]
+
+        logger.info(f"Fetching agent details from {len(cluster_list)} clusters...")
+
+        for cluster_index, cluster_name in enumerate(cluster_list):
+            if not cluster_name:
+                continue
+
+            api_server = f"https://api.{cluster_name}.{self.config.domain_name}:6443"
+            logger.debug(f"Querying cluster: {cluster_name} at {api_server}")
+
+            try:
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                for agent in agents:
+                    result[agent.server_name] = agent
+                    logger.debug(f"Agent '{agent.server_name}' on '{agent.management_cluster}' -> deployed to '{agent.deployment_cluster}'")
+            except Exception as e:
+                logger.warning(f"Failed to query cluster '{cluster_name}': {e}")
+
+        logger.info(f"Total agents with details: {len(result)}")
+        return result
+
     def get_installed_servers_by_cluster(self) -> Dict[str, List[str]]:
         """
-        Get installed servers grouped by cluster.
+        Get installed servers grouped by management cluster.
 
         Returns:
             Dict mapping cluster name to list of installed server names
@@ -266,10 +327,11 @@ class AgentFilter:
             logger.debug(f"Querying cluster: {cluster_name} at {api_server}")
 
             try:
-                agent_names = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
-                if agent_names:
-                    result[cluster_name] = sorted(list(agent_names))
-                    logger.info(f"Cluster '{cluster_name}': {len(agent_names)} servers installed")
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                if agents:
+                    server_names = [agent.server_name for agent in agents]
+                    result[cluster_name] = sorted(server_names)
+                    logger.info(f"Cluster '{cluster_name}': {len(agents)} servers installed")
                 else:
                     result[cluster_name] = []
                     logger.debug(f"Cluster '{cluster_name}': No servers installed")

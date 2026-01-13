@@ -350,8 +350,15 @@ function createServerCard(server) {
     if (server.cluster) {
         const cluster = document.createElement('div');
         cluster.className = 'server-cluster';
-        cluster.innerHTML = `📦 ${server.cluster}`;
+        cluster.innerHTML = `📦 Management: ${server.cluster}`;
         info.appendChild(cluster);
+    }
+
+    if (server.deployment_cluster) {
+        const deployCluster = document.createElement('div');
+        deployCluster.className = 'server-deployment';
+        deployCluster.innerHTML = `🚀 Deployed to: ${server.deployment_cluster}`;
+        info.appendChild(deployCluster);
     }
 
     card.appendChild(indicator);
