@@ -307,8 +307,14 @@ async def get_servers(
         if not force_refresh:
             cached_entry = await cache.get(cache_key)
             if cached_entry:
-                # Add cache info
+                # HYBRID APPROACH: Use cached vendor scan data (expensive)
+                # but refresh maintenance data (cheap PVC read)
                 data = cached_entry.data
+                logger.info(f"Using cached vendor data, refreshing maintenance status...")
+
+                # Refresh maintenance status for all servers
+                data = await refresh_maintenance_status(data)
+
                 data.cache_info = CacheInfo(
                     cached=True,
                     age_seconds=cached_entry.age_seconds(),
@@ -415,8 +421,8 @@ async def set_maintenance(server_name: str, maintenance: MaintenanceInfo):
         record = MaintenanceRecord(**maintenance.dict())
         await maintenance_store.set_maintenance(server_name, record)
 
-        # Clear cache to trigger refresh
-        await cache.clear()
+        # No need to clear cache - hybrid approach will pick up changes on next request
+        logger.info(f"Maintenance set for {server_name}, will be visible on next API call")
 
         return {"status": "success", "server": server_name}
 
@@ -440,8 +446,8 @@ async def remove_maintenance(server_name: str):
     try:
         await maintenance_store.remove_maintenance(server_name)
 
-        # Clear cache to trigger refresh
-        await cache.clear()
+        # No need to clear cache - hybrid approach will pick up changes on next request
+        logger.info(f"Maintenance removed for {server_name}, will be visible on next API call")
 
         return {"status": "removed", "server": server_name}
 
@@ -480,6 +486,43 @@ async def get_server_details(server_name: str):
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+async def refresh_maintenance_status(dashboard_data: DashboardData) -> DashboardData:
+    """
+    Refresh maintenance status in cached dashboard data.
+
+    This allows us to use cached vendor scan data (expensive) while
+    keeping maintenance status up-to-date (cheap PVC read).
+
+    Args:
+        dashboard_data: Cached dashboard data with potentially stale maintenance info
+
+    Returns:
+        DashboardData with refreshed maintenance status
+    """
+    # Load fresh maintenance records from PVC
+    maintenance_records = await maintenance_store.get_all_maintenance()
+
+    # Update each server's maintenance status
+    for zone in dashboard_data.zones:
+        for vendor, servers in zone.vendors.items():
+            for server in servers:
+                normalized_name = server.name.lower().strip()
+
+                # Check if server is in maintenance (highest priority)
+                if normalized_name in maintenance_records:
+                    # Update to maintenance status
+                    server.status = "maintenance"
+                    server.maintenance = MaintenanceInfo(**maintenance_records[normalized_name].dict())
+                elif server.maintenance is not None:
+                    # Server was in maintenance but no longer is
+                    # Revert to installed or available based on cluster presence
+                    server.status = "installed" if server.cluster else "available"
+                    server.maintenance = None
+                # If server.maintenance is None and not in records, no change needed
+
+    return dashboard_data
+
 
 def get_installed_servers_by_cluster() -> Dict[str, List[str]]:
     """

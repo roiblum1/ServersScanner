@@ -63,6 +63,8 @@ class AppConfig:
     WORKERS = int(os.getenv("WORKERS", "1"))
 
     # Cache Settings
+    # NOTE: Hybrid caching strategy - vendor scans (expensive) are cached for TTL duration,
+    # but maintenance status (cheap PVC read) is refreshed on every request for real-time updates
     CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))  # 1 hour
     BACKGROUND_SCAN_INTERVAL = int(os.getenv("BACKGROUND_SCAN_INTERVAL", "3600"))  # 1 hour
 
