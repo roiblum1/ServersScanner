@@ -14,3 +14,7 @@ ucsmsdk>=0.9.12
 # Web UI
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Database (optional - for PostgreSQL storage)
+asyncpg>=0.29.0

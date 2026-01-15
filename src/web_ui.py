@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-FastAPI Web UI for Server Scanner
+FastAPI Web UI for Server Scanner - Refactored Architecture
 
-Provides a web interface to visualize available and installed servers
-grouped by zone, vendor, and cluster.
+Clean separation of concerns with layered architecture:
+- API Layer: FastAPI routes (src/api/)
+- Service Layer: Business logic (src/services/)
+- Repository Layer: Data access (src/repositories/)
+- Storage Layer: Persistence (src/storage/)
 
 Features:
 - In-memory caching with 1-hour TTL
 - Automatic background rescan every hour
-- Serves cached data for fast responses
+- Hybrid caching: vendor scans cached, maintenance status fresh
 """
 
 import os
@@ -16,17 +19,13 @@ import sys
 import asyncio
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import logging
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
-from pydantic import BaseModel
-import logging
 
-# Fix imports when running as script (python src/web_ui.py)
+# Fix imports when running as script
 if __name__ == "__main__" and __package__ is None:
-    # Add parent directory to path
     parent_dir = Path(__file__).parent.parent
     if str(parent_dir) not in sys.path:
         sys.path.insert(0, str(parent_dir))
@@ -34,210 +33,63 @@ if __name__ == "__main__" and __package__ is None:
 
 from src.config import (
     AppConfig,
-    VendorConfig,
     KubernetesConfig,
-    ZoneConfig,
     FeatureFlags,
     load_environment,
     setup_logging,
     validate_config
 )
-from src.services.scanner_service import initialize_scanner
-from src.models import ServerProfile
-from src.filters import AgentFilter
-from src.storage import MaintenanceStore, MaintenanceRecord
+from src.api import dashboard_routes, maintenance_routes
+from src.api.dependencies import initialize_dependencies, get_cache_repo, get_dashboard_service, get_maintenance_store
 
-# Logger will be configured later
 logger = logging.getLogger(__name__)
 
-# App instance will be created after config is loaded
+# App instance (created by create_app)
 app = None
 
-
-# ============================================================================
-# Cache Configuration
-# ============================================================================
-
-# Use config values (will be initialized from AppConfig)
-CACHE_TTL_SECONDS = None
+# Background task interval
 BACKGROUND_SCAN_INTERVAL = None
 
-class CacheEntry:
-    """Cache entry with timestamp and data"""
-    def __init__(self, data, timestamp: datetime):
-        self.data = data
-        self.timestamp = timestamp
-        self.is_scanning = False
-
-    def is_expired(self) -> bool:
-        """Check if cache entry is older than TTL"""
-        return datetime.now() - self.timestamp > timedelta(seconds=CACHE_TTL_SECONDS)
-
-    def age_seconds(self) -> int:
-        """Get age of cache in seconds"""
-        return int((datetime.now() - self.timestamp).total_seconds())
-
-
-class DataCache:
-    """Thread-safe cache for dashboard data"""
-    def __init__(self):
-        self.cache: Dict[str, CacheEntry] = {}
-        self.lock = asyncio.Lock()
-
-    async def get(self, key: str) -> Optional[CacheEntry]:
-        """Get cached entry if exists and not expired"""
-        async with self.lock:
-            entry = self.cache.get(key)
-            if entry and not entry.is_expired():
-                logger.info(f"Cache HIT for key '{key}' (age: {entry.age_seconds()}s)")
-                return entry
-            elif entry:
-                logger.info(f"Cache EXPIRED for key '{key}' (age: {entry.age_seconds()}s)")
-            else:
-                logger.info(f"Cache MISS for key '{key}'")
-            return None
-
-    async def set(self, key: str, data) -> None:
-        """Store data in cache with current timestamp"""
-        async with self.lock:
-            self.cache[key] = CacheEntry(data, datetime.now())
-            logger.info(f"Cache SET for key '{key}'")
-
-    async def mark_scanning(self, key: str, scanning: bool) -> None:
-        """Mark a cache entry as currently being scanned"""
-        async with self.lock:
-            entry = self.cache.get(key)
-            if entry:
-                entry.is_scanning = scanning
-
-    async def is_scanning(self, key: str) -> bool:
-        """Check if a scan is in progress for this key"""
-        async with self.lock:
-            entry = self.cache.get(key)
-            return entry.is_scanning if entry else False
-
-    async def clear(self) -> None:
-        """Clear all cache"""
-        async with self.lock:
-            self.cache.clear()
-            logger.info("Cache CLEARED")
-
-
-# Global cache instance
-cache = DataCache()
-
-# Global maintenance store instance
-maintenance_store = MaintenanceStore(data_dir=Path("/app/data"))
-
 
 # ============================================================================
-# Data Models
+# Startup & Background Tasks
 # ============================================================================
 
-class MaintenanceInfo(BaseModel):
-    """Maintenance record for a server"""
-    reason: str
-    severity: str  # "critical" | "high" | "medium" | "low"
-    timestamp: str
-    created_by: Optional[str] = None
+async def startup_event():
+    """Start background tasks on app startup"""
+    logger.info("Application starting up...")
 
-
-class ServerInfo(BaseModel):
-    """Server information with installation status"""
-    name: str
-    vendor: str
-    zone: Optional[str]
-    status: str  # "available", "installed", or "maintenance"
-    cluster: Optional[str] = None  # Which management cluster the agent is on
-    deployment_cluster: Optional[str] = None  # Which cluster the agent is deployed to
-    maintenance: Optional[MaintenanceInfo] = None  # Maintenance details if in maintenance mode
-
-
-class ZoneData(BaseModel):
-    """Servers grouped by zone"""
-    zone: str
-    vendors: Dict[str, List[ServerInfo]]
-
-
-class ClusterStats(BaseModel):
-    """Statistics per cluster"""
-    cluster_name: str
-    installed_count: int
-    servers: List[str]
-
-
-class CacheInfo(BaseModel):
-    """Cache metadata"""
-    cached: bool
-    age_seconds: int
-    next_refresh_seconds: int
-
-
-class DashboardData(BaseModel):
-    """Complete dashboard data"""
-    zones: List[ZoneData]
-    clusters: List[ClusterStats]
-    summary: Dict[str, int]
-    cache_info: CacheInfo
-
-
-# ============================================================================
-# Background Tasks
-# ============================================================================
-
-async def scan_and_cache(zone_filter: Optional[str] = None) -> DashboardData:
-    """
-    Perform actual scan and cache the results.
-
-    Args:
-        zone_filter: Optional zone filter
-
-    Returns:
-        Dashboard data
-    """
-    cache_key = f"dashboard_{zone_filter or 'all'}"
-
-    # Check if already scanning
-    if await cache.is_scanning(cache_key):
-        logger.info(f"Scan already in progress for '{cache_key}', skipping")
-        return None
-
+    # Initialize maintenance store
+    logger.info("Initializing maintenance store...")
     try:
-        await cache.mark_scanning(cache_key, True)
-        logger.info(f"Starting background scan for '{cache_key}'...")
-
-        # Override zone filter if provided
-        if zone_filter:
-            os.environ["ZONES"] = zone_filter
-
-        # Initialize scanner
-        scanner = initialize_scanner()
-
-        # Get all servers (without filtering installed ones)
-        logger.info("Scanning vendors for all servers...")
-        all_results = scanner.scan(filter_installed=False)
-
-        # Get installed servers per cluster
-        logger.info("Querying Kubernetes for installed servers...")
-        installed_by_cluster = get_installed_servers_by_cluster()
-
-        # Get agent details (including deployment clusters)
-        agent_details = get_agent_details_map()
-
-        # Build dashboard data
-        dashboard_data = await build_dashboard_data(all_results, installed_by_cluster, agent_details)
-
-        # Store in cache
-        await cache.set(cache_key, dashboard_data)
-
-        logger.info(f"Background scan completed for '{cache_key}' - cached for {CACHE_TTL_SECONDS}s")
-        return dashboard_data
-
+        maintenance_store = get_maintenance_store()
+        if maintenance_store:
+            await maintenance_store.initialize()
     except Exception as e:
-        logger.error(f"Error during background scan: {e}", exc_info=True)
-        raise
-    finally:
-        await cache.mark_scanning(cache_key, False)
+        logger.error(f"Maintenance store initialization failed: {e}")
+
+    # Initial scan to populate cache
+    logger.info("Performing initial scan...")
+    try:
+        cache_repo = get_cache_repo()
+        dashboard_service = get_dashboard_service()
+
+        # Check if already scanning
+        cache_key = "dashboard_all"
+        if not await cache_repo.is_scanning(cache_key):
+            try:
+                await cache_repo.mark_scanning(cache_key, True)
+                dashboard_data = await dashboard_service.build_dashboard(zone_filter=None)
+                await cache_repo.set(cache_key, dashboard_data)
+                logger.info("Initial scan completed")
+            finally:
+                await cache_repo.mark_scanning(cache_key, False)
+    except Exception as e:
+        logger.error(f"Initial scan failed: {e}")
+
+    # Start periodic rescan task
+    asyncio.create_task(periodic_rescan())
+    logger.info("Startup complete")
 
 
 async def periodic_rescan():
@@ -250,467 +102,46 @@ async def periodic_rescan():
             logger.info("Periodic rescan triggered")
 
             # Rescan default (no filter)
-            await scan_and_cache(zone_filter=None)
+            cache_repo = get_cache_repo()
+            dashboard_service = get_dashboard_service()
+
+            cache_key = "dashboard_all"
+            if not await cache_repo.is_scanning(cache_key):
+                try:
+                    await cache_repo.mark_scanning(cache_key, True)
+                    dashboard_data = await dashboard_service.build_dashboard(zone_filter=None)
+                    await cache_repo.set(cache_key, dashboard_data)
+                    logger.info("Periodic rescan completed")
+                finally:
+                    await cache_repo.mark_scanning(cache_key, False)
 
         except Exception as e:
             logger.error(f"Error in periodic rescan: {e}", exc_info=True)
 
 
-# Event handlers will be defined after app creation
-async def startup_event():
-    """Start background tasks on app startup"""
-    logger.info("Application starting up...")
+# ============================================================================
+# Static File Route
+# ============================================================================
 
-    # Initialize maintenance store
-    logger.info("Initializing maintenance store...")
-    try:
-        await maintenance_store.initialize()
-    except Exception as e:
-        logger.error(f"Maintenance store initialization failed: {e}")
-
-    # Initial scan to populate cache
-    logger.info("Performing initial scan...")
-    try:
-        await scan_and_cache(zone_filter=None)
-    except Exception as e:
-        logger.error(f"Initial scan failed: {e}")
-
-    # Start periodic rescan task
-    asyncio.create_task(periodic_rescan())
-    logger.info("Startup complete")
-
-
-# API endpoint functions (to be registered after app creation)
 async def read_root():
     """Serve the main HTML page"""
     return FileResponse("static/html/index.html")
 
 
-async def get_servers(
-    zone_filter: Optional[str] = None,
-    force_refresh: bool = False
-):
-    """
-    Get all servers with their installation status.
-
-    Args:
-        zone_filter: Optional comma-separated list of zones to filter
-        force_refresh: Force a fresh scan ignoring cache
-
-    Returns:
-        Dashboard data with servers grouped by zone and vendor
-    """
-    cache_key = f"dashboard_{zone_filter or 'all'}"
-
-    try:
-        # Check cache first (unless force refresh)
-        if not force_refresh:
-            cached_entry = await cache.get(cache_key)
-            if cached_entry:
-                # HYBRID APPROACH: Use cached vendor scan data (expensive)
-                # but refresh maintenance data (cheap PVC read)
-                data = cached_entry.data
-                logger.info(f"Using cached vendor data, refreshing maintenance status...")
-
-                # Refresh maintenance status for all servers
-                data = await refresh_maintenance_status(data)
-
-                data.cache_info = CacheInfo(
-                    cached=True,
-                    age_seconds=cached_entry.age_seconds(),
-                    next_refresh_seconds=CACHE_TTL_SECONDS - cached_entry.age_seconds()
-                )
-                return data
-
-        # Cache miss or force refresh - perform scan
-        logger.info(f"Performing fresh scan for '{cache_key}'...")
-        dashboard_data = await scan_and_cache(zone_filter)
-
-        if dashboard_data:
-            dashboard_data.cache_info = CacheInfo(
-                cached=False,
-                age_seconds=0,
-                next_refresh_seconds=CACHE_TTL_SECONDS
-            )
-            return dashboard_data
-        else:
-            raise HTTPException(status_code=503, detail="Scan already in progress")
-
-    except Exception as e:
-        logger.error(f"Error in get_servers: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error scanning servers: {str(e)}")
-
-
-async def get_cache_status():
-    """Get cache status for all keys"""
-    status = {}
-    for key, entry in cache.cache.items():
-        status[key] = {
-            "age_seconds": entry.age_seconds(),
-            "expired": entry.is_expired(),
-            "is_scanning": entry.is_scanning,
-            "next_refresh_seconds": max(0, CACHE_TTL_SECONDS - entry.age_seconds())
-        }
-    return {
-        "cache_ttl_seconds": CACHE_TTL_SECONDS,
-        "entries": status
-    }
-
-
-async def clear_cache():
-    """Manually clear all cache"""
-    await cache.clear()
-    return {"status": "cache cleared"}
-
-
-async def trigger_scan(zone_filter: Optional[str] = None):
-    """Manually trigger a background scan"""
-    try:
-        await scan_and_cache(zone_filter)
-        return {"status": "scan completed"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def get_clusters():
-    """Get list of configured clusters"""
-    cluster_names = os.getenv("K8S_CLUSTER_NAMES", "").split(",")
-    clusters = [name.strip() for name in cluster_names if name.strip()]
-    return {"clusters": clusters}
-
-
-async def get_zones():
-    """Get list of discovered zones"""
-    try:
-        # Try to get from cache first
-        cached = await cache.get("dashboard_all")
-        if cached:
-            zones = [zone.zone for zone in cached.data.zones]
-            return {"zones": zones, "cached": True}
-
-        # Fallback to fresh scan
-        scanner = initialize_scanner()
-        results = scanner.scan(filter_installed=False)
-        zones = results.get_zones()
-        return {"zones": zones, "cached": False}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting zones: {str(e)}")
-
-
-async def set_maintenance(server_name: str, maintenance: MaintenanceInfo):
-    """
-    Set server to maintenance mode.
-
-    Args:
-        server_name: Server profile name
-        maintenance: Maintenance information (reason, severity, timestamp)
-
-    Returns:
-        Success status
-    """
-    try:
-        # Validate severity
-        valid_severities = ["critical", "high", "medium", "low"]
-        if maintenance.severity.lower() not in valid_severities:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid severity. Must be one of: {', '.join(valid_severities)}"
-            )
-
-        # Store maintenance record
-        record = MaintenanceRecord(**maintenance.dict())
-        await maintenance_store.set_maintenance(server_name, record)
-
-        # No need to clear cache - hybrid approach will pick up changes on next request
-        logger.info(f"Maintenance set for {server_name}, will be visible on next API call")
-
-        return {"status": "success", "server": server_name}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error setting maintenance for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error setting maintenance: {str(e)}")
-
-
-async def remove_maintenance(server_name: str):
-    """
-    Remove maintenance status from server.
-
-    Args:
-        server_name: Server profile name
-
-    Returns:
-        Success status
-    """
-    try:
-        await maintenance_store.remove_maintenance(server_name)
-
-        # No need to clear cache - hybrid approach will pick up changes on next request
-        logger.info(f"Maintenance removed for {server_name}, will be visible on next API call")
-
-        return {"status": "removed", "server": server_name}
-
-    except Exception as e:
-        logger.error(f"Error removing maintenance for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error removing maintenance: {str(e)}")
-
-
-async def get_server_details(server_name: str):
-    """
-    Get details for a single server including maintenance status.
-
-    Args:
-        server_name: Server profile name
-
-    Returns:
-        Server details with maintenance info if applicable
-    """
-    try:
-        # Get maintenance info
-        maintenance = await maintenance_store.get_maintenance(server_name)
-
-        # Build response
-        response = {
-            "name": server_name,
-            "maintenance": maintenance.dict() if maintenance else None
-        }
-
-        return response
-
-    except Exception as e:
-        logger.error(f"Error getting server details for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting server details: {str(e)}")
-
-
 # ============================================================================
-# Helper Functions
-# ============================================================================
-
-async def refresh_maintenance_status(dashboard_data: DashboardData) -> DashboardData:
-    """
-    Refresh maintenance status in cached dashboard data.
-
-    This allows us to use cached vendor scan data (expensive) while
-    keeping maintenance status up-to-date (cheap PVC read).
-
-    Args:
-        dashboard_data: Cached dashboard data with potentially stale maintenance info
-
-    Returns:
-        DashboardData with refreshed maintenance status
-    """
-    # Load fresh maintenance records from PVC
-    maintenance_records = await maintenance_store.get_all_maintenance()
-
-    # Update each server's maintenance status
-    for zone in dashboard_data.zones:
-        for vendor, servers in zone.vendors.items():
-            for server in servers:
-                normalized_name = server.name.lower().strip()
-
-                # Check if server is in maintenance (highest priority)
-                if normalized_name in maintenance_records:
-                    # Update to maintenance status
-                    server.status = "maintenance"
-                    server.maintenance = MaintenanceInfo(**maintenance_records[normalized_name].dict())
-                elif server.maintenance is not None:
-                    # Server was in maintenance but no longer is
-                    # Revert to installed or available based on cluster presence
-                    server.status = "installed" if server.cluster else "available"
-                    server.maintenance = None
-                # If server.maintenance is None and not in records, no change needed
-
-    return dashboard_data
-
-
-def get_installed_servers_by_cluster() -> Dict[str, List[str]]:
-    """
-    Query Kubernetes to get installed servers per cluster.
-
-    Returns:
-        Dict mapping cluster name to list of installed server names
-    """
-    from src.filters import AgentConfig
-
-    # Get cluster configuration
-    cluster_names_str = os.getenv("K8S_CLUSTER_NAMES")
-    domain_name = os.getenv("K8S_DOMAIN_NAME")
-    token = os.getenv("K8S_TOKEN")
-    namespace = os.getenv("K8S_NAMESPACE", "assisted-installer")
-
-    if not all([cluster_names_str, domain_name, token]):
-        return {}
-
-    # Create agent filter
-    agent_config = AgentConfig(
-        cluster_names=cluster_names_str,
-        domain_name=domain_name,
-        token=token,
-        namespace=namespace
-    )
-
-    agent_filter = AgentFilter(agent_config)
-
-    # Get installed servers per cluster
-    return agent_filter.get_installed_servers_by_cluster()
-
-
-def get_agent_details_map():
-    """
-    Query Kubernetes to get detailed agent information including deployment clusters.
-
-    Returns:
-        Dict mapping server name to AgentInfo
-    """
-    from src.filters import AgentConfig
-
-    # Get cluster configuration
-    cluster_names_str = os.getenv("K8S_CLUSTER_NAMES")
-    domain_name = os.getenv("K8S_DOMAIN_NAME")
-    token = os.getenv("K8S_TOKEN")
-    namespace = os.getenv("K8S_NAMESPACE", "assisted-installer")
-
-    if not all([cluster_names_str, domain_name, token]):
-        return {}
-
-    # Create agent filter
-    agent_config = AgentConfig(
-        cluster_names=cluster_names_str,
-        domain_name=domain_name,
-        token=token,
-        namespace=namespace
-    )
-
-    agent_filter = AgentFilter(agent_config)
-
-    # Get detailed agent information
-    return agent_filter.get_agent_details()
-
-
-async def build_dashboard_data(all_results, installed_by_cluster: Dict[str, List[str]], agent_details: Dict = None) -> DashboardData:
-    """
-    Build dashboard data structure.
-
-    Args:
-        all_results: ScanResults with all servers
-        installed_by_cluster: Dict mapping cluster to installed server names
-        agent_details: Dict mapping server name to AgentInfo (optional)
-
-    Returns:
-        DashboardData ready for frontend
-    """
-    if agent_details is None:
-        agent_details = {}
-
-    # Load ALL maintenance records once for efficiency
-    maintenance_records = await maintenance_store.get_all_maintenance()
-
-    # Flatten installed servers to set for quick lookup
-    all_installed = set()
-    for servers in installed_by_cluster.values():
-        all_installed.update(servers)
-
-    # Build zone data
-    zones_data = []
-    for zone in all_results.get_zones():
-        vendors_data = {}
-
-        for vendor in all_results.get_vendors_in_zone(zone):
-            profiles = all_results.get_profiles(zone, vendor)
-            servers_info = []
-
-            for profile in sorted(profiles, key=lambda p: p.name):
-                # Determine status and cluster
-                status = "available"
-                cluster = None
-                deployment_cluster = None
-                maintenance_info = None
-
-                # Normalize for case-insensitive comparison
-                normalized_name = profile.name.lower().strip()
-
-                # Check maintenance FIRST (highest priority)
-                if normalized_name in maintenance_records:
-                    status = "maintenance"
-                    maintenance_info = maintenance_records[normalized_name]
-                elif normalized_name in all_installed:
-                    status = "installed"
-                    # Find which management cluster
-                    for cluster_name, servers in installed_by_cluster.items():
-                        if normalized_name in servers:
-                            cluster = cluster_name
-                            break
-
-                    # Get deployment cluster from agent details
-                    if normalized_name in agent_details:
-                        agent_info = agent_details[normalized_name]
-                        deployment_cluster = agent_info.deployment_cluster
-
-                servers_info.append(ServerInfo(
-                    name=profile.name,
-                    vendor=vendor,
-                    zone=zone,
-                    status=status,
-                    cluster=cluster,
-                    deployment_cluster=deployment_cluster,
-                    maintenance=MaintenanceInfo(**maintenance_info.dict()) if maintenance_info else None
-                ))
-
-            vendors_data[vendor] = servers_info
-
-        zones_data.append(ZoneData(
-            zone=zone if zone != "Unknown Zone" else "Unknown",
-            vendors=vendors_data
-        ))
-
-    # Build cluster stats
-    cluster_stats = []
-    for cluster_name, servers in installed_by_cluster.items():
-        cluster_stats.append(ClusterStats(
-            cluster_name=cluster_name,
-            installed_count=len(servers),
-            servers=sorted(servers)
-        ))
-
-    # Build summary
-    total_servers = sum(len(servers) for servers in installed_by_cluster.values())
-    available_count = sum(
-        len([s for s in vendor_servers if s.status == "available"])
-        for zone in zones_data
-        for vendor_servers in zone.vendors.values()
-    )
-
-    summary = {
-        "total_available": available_count,
-        "total_installed": total_servers,
-        "total_clusters": len(installed_by_cluster),
-        "total_zones": len(zones_data)
-    }
-
-    return DashboardData(
-        zones=zones_data,
-        clusters=cluster_stats,
-        summary=summary,
-        cache_info=CacheInfo(
-            cached=False,
-            age_seconds=0,
-            next_refresh_seconds=CACHE_TTL_SECONDS
-        )
-    )
-
-
-# ============================================================================
-# Initialization
+# Application Factory
 # ============================================================================
 
 def create_app():
     """Create and configure FastAPI application"""
-    global app, CACHE_TTL_SECONDS, BACKGROUND_SCAN_INTERVAL
+    global app, BACKGROUND_SCAN_INTERVAL
 
-    # Initialize cache settings from config
-    CACHE_TTL_SECONDS = AppConfig.CACHE_TTL_SECONDS
+    # Initialize background scan interval
     BACKGROUND_SCAN_INTERVAL = AppConfig.BACKGROUND_SCAN_INTERVAL
+
+    # Initialize dependencies (singleton instances)
+    logger.info("Initializing dependencies...")
+    initialize_dependencies()
 
     # Create FastAPI app
     app = FastAPI(
@@ -721,29 +152,23 @@ def create_app():
 
     # Mount static files
     app.mount("/static", StaticFiles(directory=AppConfig.STATIC_DIR), name="static")
-    
+
     # Register event handlers
     app.add_event_handler("startup", startup_event)
-    
-    # Register API endpoints
+
+    # Register static file route
     app.get("/", response_class=HTMLResponse)(read_root)
-    app.get("/api/servers", response_model=DashboardData)(get_servers)
-    app.get("/api/cache/status")(get_cache_status)
-    app.post("/api/cache/clear")(clear_cache)
-    app.post("/api/scan/trigger")(trigger_scan)
-    app.get("/api/clusters")(get_clusters)
-    app.get("/api/zones")(get_zones)
 
-    # Maintenance endpoints
-    app.put("/api/servers/{server_name}/maintenance")(set_maintenance)
-    app.delete("/api/servers/{server_name}/maintenance")(remove_maintenance)
-    app.get("/api/servers/{server_name}")(get_server_details)
+    # Register API routers
+    app.include_router(dashboard_routes.router)
+    app.include_router(maintenance_routes.router)
 
+    logger.info("Application configured successfully")
     return app
 
 
 # ============================================================================
-# Main
+# Main Entry Point
 # ============================================================================
 
 def main():
@@ -819,7 +244,6 @@ Examples:
     # Load environment
     if args.env_file:
         load_environment(args.env_file)
-    # else: already loaded by config module
 
     # Setup logging
     setup_logging(verbose=args.verbose, log_file=args.log_file)
@@ -844,6 +268,7 @@ Examples:
     logger.info(f"Cache TTL: {AppConfig.CACHE_TTL_SECONDS}s")
     logger.info(f"Background scan interval: {AppConfig.BACKGROUND_SCAN_INTERVAL}s")
     logger.info(f"Kubernetes configured: {KubernetesConfig.is_configured()}")
+    logger.info("Architecture: Layered (API → Service → Repository → Storage)")
 
     # Start server
     import uvicorn
@@ -859,7 +284,6 @@ Examples:
 # Initialize app if not running as main (e.g., when imported by uvicorn)
 if app is None:
     try:
-        # Load default environment
         load_environment()
         setup_logging()
         validate_config()
@@ -868,7 +292,7 @@ if app is None:
         # If initialization fails, create a minimal app to avoid import errors
         app = FastAPI(title="Server Scanner (Config Error)")
         error_msg = str(init_error)
-        
+
         @app.get("/")
         async def config_error():
             return {"error": f"Configuration error: {error_msg}"}

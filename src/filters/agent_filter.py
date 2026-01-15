@@ -7,7 +7,7 @@ Uses hostname/requestedHostname logic to extract server names.
 
 import logging
 from typing import Set, Optional, Dict, List
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
@@ -16,25 +16,26 @@ from ..parsers import HostnameParser
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class AgentInfo:
+class AgentInfo(BaseModel):
     """
-    Information about an installed agent.
+    Information about an installed agent with validation.
 
     Attributes:
         server_name: Normalized server hostname
         management_cluster: Which management cluster this agent is on
         deployment_cluster: Which cluster the agent is deployed to (from clusterDeploymentName)
     """
-    server_name: str
-    management_cluster: str
-    deployment_cluster: Optional[str] = None
+    server_name: str = Field(..., min_length=1, max_length=255, description="Normalized server hostname")
+    management_cluster: str = Field(..., min_length=1, description="Management cluster name")
+    deployment_cluster: Optional[str] = Field(None, description="Deployment cluster name")
+
+    class Config:
+        frozen = True  # Immutable
 
 
-@dataclass
-class AgentConfig:
+class AgentConfig(BaseModel):
     """
-    Kubernetes Agent filter configuration.
+    Kubernetes Agent filter configuration with validation.
 
     Attributes:
         cluster_names: Comma-separated list of cluster names
@@ -42,10 +43,10 @@ class AgentConfig:
         token: Comma-separated tokens (one per cluster)
         namespace: Namespace to query (default: 'assisted-installer')
     """
-    cluster_names: str
-    domain_name: str
-    token: str
-    namespace: str = "assisted-installer"
+    cluster_names: str = Field(..., min_length=1, description="Comma-separated cluster names")
+    domain_name: str = Field(..., min_length=1, description="Domain name for API servers")
+    token: str = Field(..., min_length=1, description="Comma-separated auth tokens")
+    namespace: str = Field(default="assisted-installer", description="Kubernetes namespace")
 
     def get_token_for_cluster(self, cluster_index: int) -> Optional[str]:
         """

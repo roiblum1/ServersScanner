@@ -1,11 +1,11 @@
 import logging
 import re
 from typing import Dict, List, Optional, Tuple
-import requests
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
 from .base_strategy import VendorStrategy
 from ..models import ServerProfile
+from ..infrastructure import VendorHTTPClient, CursorPaginator, PaginatedFetcher
 
 disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
@@ -17,6 +17,7 @@ class HPStrategy(VendorStrategy):
     def __init__(self, credentials: Dict[str, str]):
         super().__init__(credentials)
         self.base_url = f"https://{self.credentials.get('ip')}" if credentials.get('ip') else None
+        self._http_client: Optional[VendorHTTPClient] = None
 
     @property
     def vendor_name(self) -> str:
@@ -32,25 +33,30 @@ class HPStrategy(VendorStrategy):
 
     def ensure_connected(self) -> None:
         """Connect to HP OneView"""
-        if self._session and self._auth_token:
+        if self._http_client and self._auth_token:
             return
 
         logger.info(f"Connecting to HP OneView at {self.credentials.get('ip')}...")
-        self._session = requests.Session()
-        self._session.verify = False
 
-        auth_url = f"{self.base_url}/rest/login-sessions"
+        # Initialize HTTP client
+        self._http_client = VendorHTTPClient(
+            base_url=self.base_url,
+            verify_ssl=False,
+            timeout=30
+        )
+
+        # Authenticate
         auth_data = {
             "userName": self.credentials["username"],
             "password": self.credentials["password"]
         }
         headers = {"Content-Type": "application/json", "X-API-Version": "2000"}
 
-        response = self._session.post(auth_url, json=auth_data, headers=headers)
-        response.raise_for_status()
-
+        response = self._http_client.post("/rest/login-sessions", json_data=auth_data, headers=headers)
         self._auth_token = response.json().get("sessionID")
-        self._session.headers.update({
+
+        # Update session headers with auth token
+        self._http_client.session.headers.update({
             "Auth": self._auth_token,
             "X-API-Version": "2000"
         })
@@ -65,22 +71,14 @@ class HPStrategy(VendorStrategy):
 
         # Build cache if not exists
         if self._cache is None:
-            self._cache = []
-            next_page_uri = f"{self.base_url}/rest/server-profiles?count=-1"
-
-            while next_page_uri:
-                try:
-                    response = self._session.get(next_page_uri)
-                    response.raise_for_status()
-                    page_data = response.json()
-                except Exception as e:
-                    logger.error(f"Failed to retrieve server profiles: {e}")
-                    return None, None
-
-                self._cache.extend(page_data.get("members", []))
-                next_page_uri = page_data.get("nextPageUri")
-                if next_page_uri:
-                    next_page_uri = f"{self.base_url}{next_page_uri}"
+            try:
+                # Use paginated fetcher
+                paginator = CursorPaginator(items_key="members", next_uri_key="nextPageUri")
+                fetcher = PaginatedFetcher(self._http_client, paginator)
+                self._cache = fetcher.fetch_all("/rest/server-profiles?count=-1")
+            except Exception as e:
+                logger.error(f"Failed to retrieve server profiles: {e}")
+                return None, None
 
         # Find specific server
         for server in self._cache:
@@ -94,12 +92,8 @@ class HPStrategy(VendorStrategy):
                     logger.warning(f"Server {server_name} has no serverHardwareUri")
                     continue
 
-                if not server_hardware_uri.startswith(self.base_url):
-                    server_hardware_uri = f"{self.base_url}{server_hardware_uri}"
-
                 try:
-                    response = self._session.get(server_hardware_uri)
-                    response.raise_for_status()
+                    response = self._http_client.get(server_hardware_uri)
                     server_hardware = response.json()
                 except Exception as e:
                     logger.error(f"Failed to retrieve server hardware details: {e}")
@@ -131,28 +125,21 @@ class HPStrategy(VendorStrategy):
         profiles: List[ServerProfile] = []
         regex = re.compile(pattern, re.IGNORECASE)
 
-        # Paginate through all server profiles - NAMES ONLY
-        next_page_uri = f"{self.base_url}/rest/server-profiles?count=-1"
+        # Use paginated fetcher to get all server profiles
+        paginator = CursorPaginator(items_key="members", next_uri_key="nextPageUri")
+        fetcher = PaginatedFetcher(self._http_client, paginator)
+        all_profiles = fetcher.fetch_all("/rest/server-profiles?count=-1")
 
-        while next_page_uri:
-            response = self._session.get(next_page_uri)
-            response.raise_for_status()
-            page_data = response.json()
-
-            for profile in page_data.get("members", []):
-                name = profile.get("name", "")
-
-                if regex.match(name):
-                    # Just the name - no MAC/BMC lookups
-                    server_profile = ServerProfile(
-                        name=name,
-                        vendor="HP"
-                    )
-                    profiles.append(server_profile)
-
-            next_page_uri = page_data.get("nextPageUri")
-            if next_page_uri:
-                next_page_uri = f"{self.base_url}{next_page_uri}"
+        # Filter by pattern
+        for profile in all_profiles:
+            name = profile.get("name", "")
+            if regex.match(name):
+                # Just the name - no MAC/BMC lookups
+                server_profile = ServerProfile(
+                    name=name,
+                    vendor="HP"
+                )
+                profiles.append(server_profile)
 
         return profiles
 
@@ -177,13 +164,13 @@ class HPStrategy(VendorStrategy):
 
     def disconnect(self) -> None:
         """Disconnect from HP OneView"""
-        if self._session and self._auth_token:
+        if self._http_client and self._auth_token:
             try:
-                self._session.delete(f"{self.base_url}/rest/login-sessions")
+                self._http_client.delete("/rest/login-sessions")
                 logger.info("Successfully disconnected from HP OneView")
             except Exception as e:
                 logger.warning(f"Error during HP OneView logout: {e}")
             finally:
-                self._session.close()
-                self._session = None
+                self._http_client.close()
+                self._http_client = None
                 self._auth_token = None

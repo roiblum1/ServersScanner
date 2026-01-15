@@ -154,6 +154,44 @@ class KubernetesConfig:
         return [t.strip() for t in cls.TOKEN.split(",") if t.strip()]
 
 
+class DatabaseConfig:
+    """Database configuration for maintenance storage"""
+
+    # Storage backend: "postgres" or "file"
+    STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "file")
+
+    # PostgreSQL settings
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+    POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_DB = os.getenv("POSTGRES_DB", "server_scanner")
+    POSTGRES_USER = os.getenv("POSTGRES_USER", "scanner")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+
+    # Connection pool settings
+    POSTGRES_MIN_POOL_SIZE = int(os.getenv("POSTGRES_MIN_POOL_SIZE", "5"))
+    POSTGRES_MAX_POOL_SIZE = int(os.getenv("POSTGRES_MAX_POOL_SIZE", "20"))
+
+    # File storage (fallback)
+    DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+
+    @classmethod
+    def use_postgres(cls) -> bool:
+        """Check if PostgreSQL should be used"""
+        return cls.STORAGE_BACKEND.lower() == "postgres"
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        """Check if database is properly configured"""
+        if cls.use_postgres():
+            return all([
+                cls.POSTGRES_HOST,
+                cls.POSTGRES_DB,
+                cls.POSTGRES_USER,
+                cls.POSTGRES_PASSWORD
+            ])
+        return True  # File storage always available
+
+
 class ZoneConfig:
     """Zone filtering configuration"""
 

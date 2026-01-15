@@ -9,9 +9,10 @@ FROM python:3.11-slim as builder
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (including PostgreSQL client library)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
@@ -28,6 +29,11 @@ FROM python:3.11-slim
 LABEL maintainer="Server Scanner Dashboard"
 LABEL description="FastAPI-based server monitoring dashboard"
 LABEL version="1.0.0"
+
+# Install runtime dependencies (PostgreSQL client library for asyncpg)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (using default UID)
 RUN useradd -m -s /bin/bash scanner && \

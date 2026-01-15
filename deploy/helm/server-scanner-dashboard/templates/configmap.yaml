@@ -25,3 +25,14 @@ data:
   ENABLE_BACKGROUND_SCAN: {{ .Values.config.enableBackgroundScan | quote }}
   ENABLE_METRICS: {{ .Values.config.enableMetrics | quote }}
   DEBUG: {{ .Values.config.debug | quote }}
+
+  # Storage backend configuration
+  STORAGE_BACKEND: {{ .Values.config.storageBackend | quote }}
+  DATA_DIR: {{ .Values.config.dataDir | quote }}
+
+  {{- if .Values.postgres.enabled }}
+  # PostgreSQL configuration
+  POSTGRES_HOST: {{ include "server-scanner-dashboard.fullname" . }}-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  {{- end }}
