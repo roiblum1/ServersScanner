@@ -287,7 +287,7 @@ if app is None:
         load_environment()
         setup_logging()
         validate_config()
-        create_app()
+        app = create_app()
     except Exception as init_error:
         # If initialization fails, create a minimal app to avoid import errors
         app = FastAPI(title="Server Scanner (Config Error)")

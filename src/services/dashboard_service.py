@@ -84,8 +84,6 @@ class DashboardService:
         # Get installed servers per cluster
         logger.info("Querying Kubernetes for installed servers...")
         installed_by_cluster = await self.k8s_repo.get_installed_servers_by_cluster()
-
-        # Get agent details (including deployment clusters)
         agent_details = await self.k8s_repo.get_agent_details()
 
         # Load maintenance records
