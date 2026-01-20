@@ -175,6 +175,10 @@ secrets:
   ucsCentralUsername: ""
   ucsCentralPassword: ""
 
+  # Cisco UCS Manager (used to connect to individual domains)
+  ucsManagerUsername: ""
+  ucsManagerPassword: ""
+
   # Kubernetes
   k8sClusterNames: ""
   k8sDomainName: ""

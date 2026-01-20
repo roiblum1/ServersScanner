@@ -106,6 +106,10 @@ class VendorConfig:
     UCS_CENTRAL_USERNAME = os.getenv("UCS_CENTRAL_USERNAME")
     UCS_CENTRAL_PASSWORD = os.getenv("UCS_CENTRAL_PASSWORD")
 
+    # Cisco UCS Manager (for individual domain connections)
+    UCS_MANAGER_USERNAME = os.getenv("UCS_MANAGER_USERNAME")
+    UCS_MANAGER_PASSWORD = os.getenv("UCS_MANAGER_PASSWORD")
+
     @classmethod
     def get_credentials(cls, vendor: str) -> dict:
         """Get credentials for a specific vendor"""
