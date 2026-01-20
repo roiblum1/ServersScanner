@@ -41,19 +41,6 @@ spec:
                 name: {{ include "server-scanner-dashboard.fullname" . }}
             - secretRef:
                 name: {{ .Values.existingSecret | default (include "server-scanner-dashboard.fullname" .) }}
-          {{- if .Values.postgres.enabled }}
-          env:
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "server-scanner-dashboard.fullname" . }}-postgres
-                  key: username
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "server-scanner-dashboard.fullname" . }}-postgres
-                  key: password
-          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -63,7 +50,7 @@ spec:
           {{- if .Values.persistence.enabled }}
           volumeMounts:
             - name: data
-              mountPath: /app/data
+              mountPath: {{ .Values.config.dataDir }}
           {{- end }}
       {{- if .Values.persistence.enabled }}
       volumes:

@@ -118,63 +118,15 @@ readinessProbe:
   failureThreshold: 3
 
 # ============================================================================
-# Persistent Volume Claim (for maintenance data storage - DEPRECATED)
-# NOTE: Consider using PostgreSQL (see postgres section below) for production
+# Persistent Volume Claim (for maintenance data storage)
 # ============================================================================
 persistence:
-  enabled: false  # Disabled by default - use PostgreSQL instead
+  enabled: true
   storageClass: ""  # Leave empty for default, or specify: "nfs-client", "efs-sc", etc.
   accessMode: ReadWriteMany  # Multi-pod support for maintenance data
   size: 1Gi  # Sufficient for maintenance records
   annotations: {}
   # existingClaim: ""  # Use existing PVC instead of creating new
-
-# ============================================================================
-# PostgreSQL Database (Recommended for production)
-# ============================================================================
-postgres:
-  # Enable PostgreSQL deployment
-  enabled: true
-
-  # PostgreSQL image configuration
-  image:
-    repository: postgres
-    tag: "15-alpine"
-    pullPolicy: IfNotPresent
-
-  # Authentication credentials
-  auth:
-    username: scanner
-    password: ""  # REQUIRED: Set password in production
-    database: server_scanner
-
-  # Database settings
-  database: server_scanner
-
-  # Resource limits
-  resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
-
-  # Persistence configuration
-  persistence:
-    enabled: true
-    storageClass: ""  # Leave empty for default
-    accessMode: ReadWriteOnce
-    size: 5Gi
-
-  # Security context
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 999  # postgres user
-    fsGroup: 999
-
-  # Optional: Database initialization script
-  initScript: true  # Enable to create schema on first start
 
 # ============================================================================
 # ConfigMap Configuration
@@ -201,9 +153,8 @@ config:
   enableMetrics: "false"
   debug: "false"
 
-  # Storage backend configuration
-  storageBackend: "postgres"  # Options: "file" or "postgres"
-  dataDir: "/data"  # Only used when storageBackend is "file"
+  # Data storage directory
+  dataDir: "/app/data"
 
 # ============================================================================
 # Secrets (vendor credentials and K8s tokens)
