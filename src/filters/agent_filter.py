@@ -1,0 +1,347 @@
+"""
+Kubernetes Agent CRD filter - replaces BareMetalHost filter.
+
+Queries Agent resources from Kubernetes clusters to identify installed servers.
+Uses hostname/requestedHostname logic to extract server names.
+"""
+
+import logging
+from typing import Set, Optional, Dict, List
+from pydantic import BaseModel, Field
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+
+from ..parsers import HostnameParser
+
+logger = logging.getLogger(__name__)
+
+
+class AgentInfo(BaseModel):
+    """
+    Information about an installed agent with validation.
+
+    Attributes:
+        server_name: Normalized server hostname
+        management_cluster: Which management cluster this agent is on
+        deployment_cluster: Which cluster the agent is deployed to (from clusterDeploymentName)
+    """
+    server_name: str = Field(..., min_length=1, max_length=255, description="Normalized server hostname")
+    management_cluster: str = Field(..., min_length=1, description="Management cluster name")
+    deployment_cluster: Optional[str] = Field(None, description="Deployment cluster name")
+
+    class Config:
+        frozen = True  # Immutable
+
+
+class AgentConfig(BaseModel):
+    """
+    Kubernetes Agent filter configuration with validation.
+
+    Attributes:
+        cluster_names: Comma-separated list of cluster names
+        domain_name: Domain name for API servers
+        token: Comma-separated tokens (one per cluster)
+        namespace: Namespace to query (default: 'assisted-installer')
+    """
+    cluster_names: str = Field(..., min_length=1, description="Comma-separated cluster names")
+    domain_name: str = Field(..., min_length=1, description="Domain name for API servers")
+    token: str = Field(..., min_length=1, description="Comma-separated auth tokens")
+    namespace: str = Field(default="assisted-installer", description="Kubernetes namespace")
+
+    def get_token_for_cluster(self, cluster_index: int) -> Optional[str]:
+        """
+        Get token for a specific cluster by index.
+
+        Args:
+            cluster_index: Index of the cluster
+
+        Returns:
+            Token for the cluster or None if index out of range
+        """
+        tokens = [t.strip() for t in self.token.split(',')]
+
+        if cluster_index < len(tokens):
+            return tokens[cluster_index]
+        else:
+            logger.error(f"Not enough tokens provided. Need token for cluster #{cluster_index + 1}, but only {len(tokens)} tokens configured.")
+            return None
+
+
+class AgentFilter:
+    """
+    Kubernetes Agent CRD filter.
+
+    Queries Agent resources from multiple Kubernetes clusters and extracts
+    server names using hostname/requestedHostname logic.
+
+    Design Pattern: Strategy pattern for filtering installed servers
+    """
+
+    # Agent CRD details
+    AGENT_GROUP = "agent-install.openshift.io"
+    AGENT_VERSION = "v1beta1"
+    AGENT_PLURAL = "agents"
+
+    def __init__(self, config: AgentConfig):
+        """
+        Initialize Agent filter.
+
+        Args:
+            config: Agent filter configuration
+        """
+        self.config = config
+        self._installed_servers: Optional[Set[str]] = None
+        self._hostname_parser = HostnameParser()
+
+    def is_configured(self) -> bool:
+        """Check if Agent filter is properly configured"""
+        return all([
+            self.config.cluster_names,
+            self.config.domain_name,
+            self.config.token
+        ])
+
+    def get_installed_servers(self) -> Set[str]:
+        """
+        Get set of server names that are already installed (exist as Agent resources).
+
+        Returns:
+            Set of server names extracted from Agent resources
+        """
+        if self._installed_servers is not None:
+            return self._installed_servers
+
+        self._installed_servers = set()
+        cluster_list = [c.strip() for c in self.config.cluster_names.split(',')]
+
+        logger.info(f"Checking Agent resources across {len(cluster_list)} Kubernetes clusters...")
+
+        for cluster_index, cluster_name in enumerate(cluster_list):
+            if not cluster_name:
+                continue
+
+            api_server = f"https://api.{cluster_name}.{self.config.domain_name}:6443"
+            logger.info(f"Querying cluster: {cluster_name} at {api_server}")
+
+            try:
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                if agents:
+                    logger.info(f"Found {len(agents)} Agent resources in cluster '{cluster_name}'")
+                    # Extract just the server names for the set
+                    server_names = {agent.server_name for agent in agents}
+                    self._installed_servers.update(server_names)
+                else:
+                    logger.info(f"No Agent resources found in cluster '{cluster_name}'")
+            except Exception as e:
+                logger.warning(f"Failed to query cluster '{cluster_name}': {e}")
+
+        logger.info(f"Total installed servers across all clusters: {len(self._installed_servers)}")
+        return self._installed_servers
+
+    def _get_agents_from_cluster(self, api_server: str, cluster_name: str, cluster_index: int) -> List[AgentInfo]:
+        """
+        Query Agent resources from a specific cluster.
+
+        Args:
+            api_server: Kubernetes API server URL
+            cluster_name: Cluster name
+            cluster_index: Index of cluster (for per-cluster tokens)
+
+        Returns:
+            List of AgentInfo objects with server details
+        """
+        agents = []
+
+        try:
+            # Create cluster-specific configuration
+            configuration = client.Configuration()
+            configuration.host = api_server
+            configuration.verify_ssl = False
+
+            # Get token for this cluster
+            cluster_token = self.config.get_token_for_cluster(cluster_index)
+            if not cluster_token:
+                logger.error(f"No token available for cluster {cluster_name}")
+                return agents
+
+            # Configure token authentication
+            configuration.api_key = {"authorization": f"Bearer {cluster_token}"}
+            logger.debug(f"Using token authentication for cluster {cluster_name} (token #{cluster_index + 1})")
+
+            # Create API client
+            api_client = client.ApiClient(configuration)
+            custom_api = client.CustomObjectsApi(api_client)
+
+            try:
+                # Query Agent custom resources across all namespaces
+                agent_list = custom_api.list_cluster_custom_object(
+                    group=self.AGENT_GROUP,
+                    version=self.AGENT_VERSION,
+                    plural=self.AGENT_PLURAL,
+                    _request_timeout=30
+                )
+
+                # Extract information from Agent resources
+                for item in agent_list.get("items", []):
+                    hostname, requested_hostname = self._extract_agent_hostnames(item)
+                    server_name = self._hostname_parser.extract_hostname(hostname, requested_hostname)
+
+                    if server_name:
+                        # Normalize to lowercase for case-insensitive comparison
+                        normalized_name = server_name.lower().strip()
+
+                        # Extract cluster deployment name from spec.clusterDeploymentName.name
+                        spec = item.get("spec", {})
+                        cluster_deployment = spec.get("clusterDeploymentName", {})
+                        deployment_cluster_name = cluster_deployment.get("name") if isinstance(cluster_deployment, dict) else None
+
+                        agent_info = AgentInfo(
+                            server_name=normalized_name,
+                            management_cluster=cluster_name,
+                            deployment_cluster=deployment_cluster_name
+                        )
+                        agents.append(agent_info)
+                        logger.debug(
+                            f"Found Agent: {server_name} (normalized: {normalized_name}) "
+                            f"on cluster '{cluster_name}', deployed to: {deployment_cluster_name or 'N/A'}"
+                        )
+
+            except ApiException as e:
+                self._handle_api_exception(e, cluster_name, cluster_index)
+            finally:
+                api_client.close()
+
+        except Exception as e:
+            logger.error(f"Error connecting to cluster '{cluster_name}': {type(e).__name__}: {e}")
+
+        return agents
+
+    def _extract_agent_hostnames(self, agent: dict) -> tuple[Optional[str], Optional[str]]:
+        """
+        Extract hostname and requestedHostname from Agent resource.
+
+        Priority order:
+        1. spec.hostname (preferred)
+        2. spec.requestedHostname (if spec.hostname is MAC address)
+        3. status.inventory.hostname (fallback)
+        4. status.requestedHostname (fallback)
+
+        The hostname parser will handle MAC address detection:
+        - If hostname contains MAC address → use requestedHostname
+        - Otherwise → use hostname
+
+        Args:
+            agent: Agent resource dict
+
+        Returns:
+            Tuple of (hostname, requestedHostname)
+        """
+        status = agent.get("status", {})
+        spec = agent.get("spec", {})
+        inventory = status.get("inventory", {})
+
+        # Priority order for hostname:
+        # 1. spec.hostname (primary source)
+        # 2. status.inventory.hostname (fallback)
+        hostname = spec.get("hostname") or inventory.get("hostname")
+
+        # Priority order for requestedHostname:
+        # 1. spec.requestedHostname (primary source)
+        # 2. status.requestedHostname (fallback)
+        requested_hostname = spec.get("requestedHostname") or status.get("requestedHostname")
+
+        logger.debug(f"Agent hostnames - hostname: {hostname}, requestedHostname: {requested_hostname}")
+        return hostname, requested_hostname
+
+    def _handle_api_exception(self, e: ApiException, cluster_name: str, cluster_index: int):
+        """Handle Kubernetes API exceptions with detailed logging"""
+        if e.status == 404:
+            logger.warning(
+                f"Agent CRD not found in cluster '{cluster_name}' - "
+                f"cluster may not have Assisted Installer"
+            )
+        elif e.status == 403:
+            logger.error(
+                f"Authentication failed (403 Forbidden) for cluster '{cluster_name}' "
+                f"(cluster #{cluster_index + 1})"
+            )
+            logger.error(f"Reason: {e.reason}")
+            logger.error(f"Token for cluster #{cluster_index + 1} may be invalid or lack permissions.")
+            logger.error("Required permissions: get, list on agents.agent-install.openshift.io")
+            logger.error("Tip: Ensure K8S_TOKEN has comma-separated tokens matching cluster order")
+        elif e.status == 401:
+            logger.error(f"Authentication failed (401 Unauthorized) for cluster '{cluster_name}'")
+            logger.error(f"Token for cluster #{cluster_index + 1} is invalid or expired.")
+        else:
+            logger.error(
+                f"Kubernetes API error for cluster '{cluster_name}': "
+                f"{e.status} - {e.reason}"
+            )
+
+    def get_agent_details(self) -> Dict[str, AgentInfo]:
+        """
+        Get detailed agent information including deployment clusters.
+
+        Returns:
+            Dict mapping server name to AgentInfo
+        """
+        result = {}
+        cluster_list = [c.strip() for c in self.config.cluster_names.split(',')]
+
+        logger.info(f"Fetching agent details from {len(cluster_list)} clusters...")
+
+        for cluster_index, cluster_name in enumerate(cluster_list):
+            if not cluster_name:
+                continue
+
+            api_server = f"https://api.{cluster_name}.{self.config.domain_name}:6443"
+            logger.debug(f"Querying cluster: {cluster_name} at {api_server}")
+
+            try:
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                for agent in agents:
+                    result[agent.server_name] = agent
+                    logger.debug(f"Agent '{agent.server_name}' on '{agent.management_cluster}' -> deployed to '{agent.deployment_cluster}'")
+            except Exception as e:
+                logger.warning(f"Failed to query cluster '{cluster_name}': {e}")
+
+        logger.info(f"Total agents with details: {len(result)}")
+        return result
+
+    def get_installed_servers_by_cluster(self) -> Dict[str, List[str]]:
+        """
+        Get installed servers grouped by management cluster.
+
+        Returns:
+            Dict mapping cluster name to list of installed server names
+        """
+        result = {}
+        cluster_list = [c.strip() for c in self.config.cluster_names.split(',')]
+
+        logger.info(f"Fetching installed servers per cluster from {len(cluster_list)} clusters...")
+
+        for cluster_index, cluster_name in enumerate(cluster_list):
+            if not cluster_name:
+                continue
+
+            api_server = f"https://api.{cluster_name}.{self.config.domain_name}:6443"
+            logger.debug(f"Querying cluster: {cluster_name} at {api_server}")
+
+            try:
+                agents = self._get_agents_from_cluster(api_server, cluster_name, cluster_index)
+                if agents:
+                    server_names = [agent.server_name for agent in agents]
+                    result[cluster_name] = sorted(server_names)
+                    logger.info(f"Cluster '{cluster_name}': {len(agents)} servers installed")
+                else:
+                    result[cluster_name] = []
+                    logger.debug(f"Cluster '{cluster_name}': No servers installed")
+            except Exception as e:
+                logger.warning(f"Failed to query cluster '{cluster_name}': {e}")
+                result[cluster_name] = []
+
+        return result
+
+    def clear_cache(self):
+        """Clear cached Agent data"""
+        self._installed_servers = None

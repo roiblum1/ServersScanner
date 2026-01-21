@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: server-scanner-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - scanner-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  server-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: server-scanner-dashboard
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Redis configuration (override with CACHE_BACKEND=redis in .env to enable)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/cache/status').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      # Mount .env for configuration
+      - ./.env:/app/.env:ro
+      # Mount data directory for maintenance JSON storage
+      - app-data:/app/data
+    networks:
+      - scanner-network
+
+volumes:
+  redis-data:
+    driver: local
+  app-data:
+    driver: local
+
+networks:
+  scanner-network:
+    driver: bridge
