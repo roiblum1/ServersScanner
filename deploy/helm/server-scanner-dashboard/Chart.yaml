@@ -14,3 +14,7 @@ maintainers:
 home: https://github.com/your-org/server-scanner
 sources:
   - https://github.com/your-org/server-scanner
+dependencies:
+  - name: redis
+    version: 1.0.0
+    condition: redis.enabled

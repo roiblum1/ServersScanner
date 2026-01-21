@@ -161,6 +161,29 @@ class KubernetesConfig:
         return [t.strip() for t in cls.TOKEN.split(",") if t.strip()]
 
 
+class RedisConfig:
+    """Redis cache configuration"""
+
+    # Redis connection settings
+    REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+
+    # Cache backend: "memory" or "redis"
+    CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")
+
+    @classmethod
+    def use_redis(cls) -> bool:
+        """Check if Redis should be used for caching"""
+        return cls.CACHE_BACKEND.lower() == "redis"
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        """Check if Redis is properly configured"""
+        return bool(cls.REDIS_HOST)
+
+
 class ZoneConfig:
     """Zone filtering configuration"""
 
@@ -336,6 +359,7 @@ __all__ = [
     'AppConfig',
     'VendorConfig',
     'KubernetesConfig',
+    'RedisConfig',
     'ZoneConfig',
     'LogConfig',
     'FeatureFlags',

@@ -28,3 +28,15 @@ data:
 
   # Data storage directory
   DATA_DIR: {{ .Values.config.dataDir | quote }}
+
+  # Cache backend configuration
+  CACHE_BACKEND: {{ .Values.config.cacheBackend | quote }}
+
+  # Redis connection (only used if CACHE_BACKEND is "redis")
+  {{- if .Values.redis.enabled }}
+  REDIS_HOST: {{ printf "%s-redis" .Release.Name | quote }}
+  {{- else }}
+  REDIS_HOST: {{ .Values.config.redisHost | default "redis" | quote }}
+  {{- end }}
+  REDIS_PORT: {{ .Values.config.redisPort | quote }}
+  REDIS_DB: {{ .Values.config.redisDb | quote }}

@@ -156,6 +156,15 @@ config:
   # Data storage directory
   dataDir: "/app/data"
 
+  # Cache backend: "memory" or "redis"
+  cacheBackend: "memory"
+
+  # Redis connection (only used if cacheBackend is "redis")
+  # The host will be automatically set to "<release-name>-redis" when using the subchart
+  redisHost: ""  # Auto-configured if using subchart
+  redisPort: "6379"
+  redisDb: "0"
+
 # ============================================================================
 # Secrets (vendor credentials and K8s tokens)
 # ============================================================================
@@ -248,3 +257,42 @@ serviceMonitor:
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
+
+# ============================================================================
+# Redis Subchart Configuration
+# ============================================================================
+# Redis is included as a subchart and deployed automatically when enabled
+# To use Redis caching, set config.cacheBackend to "redis"
+redis:
+  # Enable/disable Redis deployment
+  enabled: false
+
+  # Redis image configuration
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+
+  # Resource limits
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Persistence configuration
+  persistence:
+    enabled: true
+    storageClass: ""  # Use default storage class
+    accessMode: ReadWriteOnce
+    size: 8Gi
+    annotations: {}
+
+  # Redis configuration
+  config:
+    appendonly: "yes"
+    appendfsync: "everysec"
+    maxmemory-policy: "allkeys-lru"
+    maxmemory: ""  # No limit by default
