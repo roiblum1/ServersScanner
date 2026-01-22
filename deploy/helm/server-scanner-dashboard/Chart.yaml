@@ -1,0 +1,16 @@
+apiVersion: v2
+name: server-scanner-dashboard
+description: A Helm chart for Server Scanner Dashboard on OpenShift
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - server-scanner
+  - monitoring
+  - dashboard
+  - openshift
+maintainers:
+  - name: Server Scanner Team
+home: https://github.com/your-org/server-scanner
+sources:
+  - https://github.com/your-org/server-scanner

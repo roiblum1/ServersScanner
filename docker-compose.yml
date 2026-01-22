@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  server-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: server-scanner-dashboard
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/cache/status').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      # Mount .env for configuration
+      - ./.env:/app/.env:ro
+    networks:
+      - scanner-network
+
+networks:
+  scanner-network:
+    driver: bridge

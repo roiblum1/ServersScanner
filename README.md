@@ -8,17 +8,28 @@ Uses the **Strategy Pattern** to cleanly separate vendor-specific logic into mod
 
 ```
 Scan_Servers/
-├── scan_servers.py                 # Main CLI entry point
-├── requirements.txt                # Python dependencies
-├── .env.example                    # Example environment configuration
-└── src/
-    ├── __init__.py                 # Package initialization
-    ├── server_strategy.py          # Abstract base class & factory
-    ├── hp_server_strategy.py       # HP OneView implementation
-    ├── dell_server_strategy.py     # Dell OME implementation
-    ├── cisco_server_strategy.py    # Cisco UCS implementation
-    ├── kubernetes_bmh_filter.py    # Kubernetes BMH filter (optional)
-    └── scanner_client.py           # Unified scanner client
+├── src/
+│   ├── scan_servers.py            # Main CLI entry point
+│   ├── web_ui.py                  # FastAPI web dashboard
+│   ├── config.py                  # Centralized configuration
+│   ├── __init__.py                # Package initialization
+│   ├── filters/                   # Agent/zone filtering
+│   ├── formatters/                # Output formatters
+│   ├── models/                    # Data models
+│   ├── parsers/                   # Vendor parsers
+│   ├── repositories/              # Strategy factory
+│   ├── services/                  # Scanner service
+│   └── strategies/                # Vendor strategies
+├── static/                        # Web UI static files
+│   ├── html/
+│   ├── css/
+│   └── js/
+├── deploy/
+│   └── helm/                      # Helm chart for OpenShift
+├── Dockerfile                     # Container image
+├── docker-compose.yml             # Docker Compose config
+├── requirements.txt               # Python dependencies
+└── .env.example                   # Example environment config
 ```
 
 ## Quick Start
@@ -35,7 +46,10 @@ cp .env.example .env
 # Edit .env with your credentials
 
 # Run the scanner (default: simple list)
-python scan_servers.py
+python -m src.scan_servers
+
+# Start the web UI
+python -m src.web_ui
 ```
 
 ## Usage
@@ -44,33 +58,33 @@ python scan_servers.py
 
 ```bash
 # Scan all vendors for ocp4-hypershift-* servers (default: list format)
-python scan_servers.py
+python -m src.scan_servers
 
 # Custom pattern
-python scan_servers.py --pattern "ocp4-.*"
+python -m src.scan_servers --pattern "ocp4-.*"
 
 # Scan specific vendor only
-python scan_servers.py --vendor HP
-python scan_servers.py --vendor DELL
-python scan_servers.py --vendor CISCO
+python -m src.scan_servers --vendor HP
+python -m src.scan_servers --vendor DELL
+python -m src.scan_servers --vendor CISCO
 
 # Scan multiple vendors
-python scan_servers.py --vendor HP --vendor DELL
+python -m src.scan_servers --vendor HP --vendor DELL
 ```
 
 ### Output Formats
 
 ```bash
 # Simple list (DEFAULT) - Just server names
-python scan_servers.py
-python scan_servers.py --format list
+python -m src.scan_servers
+python -m src.scan_servers --format list
 
 # Detailed table - Names + MAC + BMC IP + Domain
-python scan_servers.py --format table
+python -m src.scan_servers --format table
 
 # JSON output - Full structured data
-python scan_servers.py --format json
-python scan_servers.py --json  # shortcut
+python -m src.scan_servers --format json
+python -m src.scan_servers --json  # shortcut
 ```
 
 ### Kubernetes BMH Filtering (Optional)
@@ -79,10 +93,10 @@ The scanner can automatically filter out servers that are already installed (exi
 
 ```bash
 # Default: Show only AVAILABLE servers (filters out installed ones)
-python scan_servers.py
+python -m src.scan_servers
 
 # Show ALL servers including installed ones
-python scan_servers.py --show-all
+python -m src.scan_servers --show-all
 ```
 
 **How it works:**
@@ -95,12 +109,22 @@ python scan_servers.py --show-all
 ```bash
 K8S_CLUSTER_NAMES=cluster1,cluster2,cluster3
 K8S_DOMAIN_NAME=example.com
-K8S_USERNAME=admin
-K8S_PASSWORD=your-password
-# OR use token authentication:
-# K8S_TOKEN=your-token
+
+# RECOMMENDED: Use token authentication (modern Kubernetes)
+# Option 1: Single token for all clusters (if they share the same service account)
+K8S_TOKEN=your-service-account-token-here
+
+# Option 2: Per-cluster tokens (comma-separated, one per cluster in same order)
+# K8S_TOKEN=token-for-cluster1,token-for-cluster2,token-for-cluster3
+
 K8S_NAMESPACE=inventory
+
+# DEPRECATED: Username/password (may not work with modern clusters)
+# K8S_USERNAME=admin
+# K8S_PASSWORD=your-password
 ```
+
+**Important**: Modern Kubernetes clusters require **token-based authentication**. See [GET_TOKEN.md](GET_TOKEN.md) for instructions on obtaining a service account token.
 
 **API Server Format:** `https://api.<cluster_name>.<domain_name>:6443`
 

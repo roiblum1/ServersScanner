@@ -2,26 +2,39 @@
 Server Scanner Package
 
 This package provides a unified interface to scan server profiles across
-HP OneView, Dell OME, and Cisco UCS Central using the strategy pattern.
+HP OneView, Dell OME, and Cisco UCS Central using industry-standard design patterns.
+
+Architecture:
+- Strategy Pattern for vendor implementations
+- Factory Pattern for creating strategies
+- Facade Pattern for simplified interface
+- Value Object Pattern for immutable data models
 """
 
-from src.server_strategy import VendorStrategy, VendorType, ServerProfile, VendorStrategyFactory
-from src.hp_server_strategy import HPServerStrategy
-from src.dell_server_strategy import DellServerStrategy
-from src.cisco_server_strategy import CiscoServerStrategy
-from src.scanner_client import ServerScanner, initialize_scanner
-from src.kubernetes_bmh_filter import KubernetesBMHFilter, KubernetesConfig
+from .models import ServerProfile, ZoneConfig
+from .strategies import VendorStrategy, VendorType, HPStrategy, DellStrategy, CiscoStrategy
+from .repositories import StrategyFactory
+from .services import ScannerService
+from .filters import AgentFilter, AgentConfig
+from .formatters import ZoneVendorFormatter
 
 __all__ = [
+    # Models
+    "ServerProfile",
+    "ZoneConfig",
+    # Strategies
     "VendorStrategy",
     "VendorType",
-    "ServerProfile",
-    "VendorStrategyFactory",
-    "HPServerStrategy",
-    "DellServerStrategy",
-    "CiscoServerStrategy",
-    "ServerScanner",
-    "initialize_scanner",
-    "KubernetesBMHFilter",
-    "KubernetesConfig"
+    "HPStrategy",
+    "DellStrategy",
+    "CiscoStrategy",
+    # Factory
+    "StrategyFactory",
+    # Services
+    "ScannerService",
+    # Filters
+    "AgentFilter",
+    "AgentConfig",
+    # Formatters
+    "ZoneVendorFormatter",
 ]
