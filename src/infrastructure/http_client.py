@@ -94,6 +94,7 @@ class VendorHTTPClient:
             json=json_data,
             headers=headers,
             timeout=self.timeout,
+            verify=False,
             **kwargs
         )
         response.raise_for_status()
@@ -127,6 +128,7 @@ class VendorHTTPClient:
             params=params,
             headers=headers,
             timeout=self.timeout,
+            verify=False,
             **kwargs
         )
         response.raise_for_status()
@@ -157,6 +159,7 @@ class VendorHTTPClient:
             url,
             headers=headers,
             timeout=self.timeout,
+            verify=False,
             **kwargs
         )
         response.raise_for_status()
