@@ -17,19 +17,19 @@ class MongoDatabase:
     Call connect() on app startup and disconnect() on shutdown.
     """
 
-    def __init__(self, uri: str, db_name: str):
+    def __init__(self, uri: str, db_name: str, tls_verify: bool = True):
         self.uri = uri
         self.db_name = db_name
+        self.tls_verify = tls_verify
         self._client: Optional[AsyncIOMotorClient] = None
 
     async def connect(self) -> None:
-        from ...config import AppConfig
         kwargs = {}
-        if not AppConfig.TLS_VERIFY:
+        if not self.tls_verify:
             kwargs["tlsAllowInvalidCertificates"] = True
         self._client = AsyncIOMotorClient(self.uri, **kwargs)
         await self._client.admin.command("ping")
-        logger.info(f"Connected to MongoDB database '{self.db_name}' (TLS verify: {AppConfig.TLS_VERIFY})")
+        logger.info(f"Connected to MongoDB database '{self.db_name}' (TLS verify: {self.tls_verify})")
 
     async def disconnect(self) -> None:
         if self._client:

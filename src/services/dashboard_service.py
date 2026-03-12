@@ -115,12 +115,8 @@ class DashboardService:
                 for doc in sorted(zone_vendor[zone][vendor], key=lambda d: d.id):
                     normalized = doc.id.lower().strip()
 
-                    if doc.maintenance is not None:
-                        status = "maintenance"
-                        cluster = None
-                        deployment_cluster = None
-                    elif normalized in all_installed:
-                        status = "installed"
+                    # Always resolve K8s cluster info — maintenance doesn't hide it
+                    if normalized in all_installed:
                         cluster = next(
                             (c for c, srvs in installed_by_cluster.items() if normalized in srvs),
                             None,
@@ -128,9 +124,16 @@ class DashboardService:
                         agent = agent_details.get(normalized)
                         deployment_cluster = getattr(agent, "deployment_cluster", None) if agent else None
                     else:
-                        status = "available"
                         cluster = None
                         deployment_cluster = None
+
+                    # Status: maintenance takes priority over installed/available
+                    if doc.maintenance is not None:
+                        status = "maintenance"
+                    elif cluster is not None:
+                        status = "installed"
+                    else:
+                        status = "available"
 
                     servers_info.append(ServerInfo(
                         name=doc.id,

@@ -622,14 +622,33 @@ function updateCardInPlace(server) {
     const dot = card.querySelector('.status-indicator');
     if (dot) dot.className = `status-indicator ${server.status}`;
 
+    const info = card.querySelector('.server-info');
+
+    // Rebuild cluster rows (remove stale, add if installed/maintenance+installed)
+    info.querySelectorAll('.server-cluster, .server-deployment').forEach(el => el.remove());
+    if (server.cluster) {
+        const clusterRow = document.createElement('div');
+        clusterRow.className = 'server-cluster';
+        clusterRow.innerHTML = `📦 ${server.cluster}`;
+        const banner = info.querySelector('.card-maint-banner');
+        banner ? info.insertBefore(clusterRow, banner) : info.appendChild(clusterRow);
+    }
+    if (server.deployment_cluster) {
+        const depRow = document.createElement('div');
+        depRow.className = 'server-deployment';
+        depRow.innerHTML = `🚀 ${server.deployment_cluster}`;
+        const banner = info.querySelector('.card-maint-banner');
+        banner ? info.insertBefore(depRow, banner) : info.appendChild(depRow);
+    }
+
     // Update or remove maintenance banner
-    const existing = card.querySelector('.card-maint-banner');
+    const existing = info.querySelector('.card-maint-banner');
     if (existing) existing.remove();
     if (server.maintenance) {
         const banner = document.createElement('div');
         banner.className = 'card-maint-banner';
         banner.innerHTML = `<span class="severity-badge ${server.maintenance.severity}">${server.maintenance.severity.toUpperCase()}</span> ${server.maintenance.reason}`;
-        card.querySelector('.server-info').appendChild(banner);
+        info.appendChild(banner);
     }
 
     // Update maintenance button
@@ -659,7 +678,13 @@ async function submitMaintenance() {
             body: JSON.stringify({ reason, severity, timestamp: new Date().toISOString(), created_by: null }),
         });
         if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
-        // Update in-place: patch currentServer and re-render just the card
+        // Save pre-maintenance state so removal can restore it correctly
+        const card = document.querySelector(`.server-card[data-name="${currentServer.name.toLowerCase()}"]`);
+        if (card) {
+            card.dataset.preStatus = currentServer.status;
+            card.dataset.preCluster = currentServer.cluster || '';
+            card.dataset.preDeployment = currentServer.deployment_cluster || '';
+        }
         currentServer.maintenance = { reason, severity, timestamp: new Date().toISOString(), created_by: null };
         currentServer.status = 'maintenance';
         updateCardInPlace(currentServer);
@@ -674,9 +699,12 @@ async function removeMaintenance() {
     try {
         const res = await fetch(`/api/servers/${encodeURIComponent(currentServer.name)}/maintenance`, { method: 'DELETE' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        // Update in-place: patch currentServer and re-render just the card
+        // Restore pre-maintenance status (could be 'installed' or 'available')
+        const card = document.querySelector(`.server-card[data-name="${currentServer.name.toLowerCase()}"]`);
         currentServer.maintenance = null;
-        currentServer.status = 'available';
+        currentServer.status = card?.dataset.preStatus || 'available';
+        currentServer.cluster = card?.dataset.preCluster || null;
+        currentServer.deployment_cluster = card?.dataset.preDeployment || null;
         updateCardInPlace(currentServer);
         closeServerModal();
     } catch (err) {

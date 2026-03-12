@@ -29,7 +29,7 @@ def initialize_dependencies() -> None:
     global _mongo_db, _server_repo, _k8s_repo, _cache_repo, _dashboard_service
 
     # MongoDB
-    _mongo_db = MongoDatabase(AppConfig.MONGO_URI, AppConfig.MONGO_DB_NAME)
+    _mongo_db = MongoDatabase(AppConfig.MONGO_URI, AppConfig.MONGO_DB_NAME, AppConfig.TLS_VERIFY)
     _server_repo = ServerRepository(_mongo_db)
 
     # Cache (lightweight in-memory cache for dashboard reads from MongoDB)

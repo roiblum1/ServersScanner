@@ -66,7 +66,7 @@ async def main() -> int:
     """Run the sync and return exit code (0=success, 1=errors)."""
     logger = logging.getLogger(__name__)
 
-    mongo_db = MongoDatabase(AppConfig.MONGO_URI, AppConfig.MONGO_DB_NAME)
+    mongo_db = MongoDatabase(AppConfig.MONGO_URI, AppConfig.MONGO_DB_NAME, AppConfig.TLS_VERIFY)
     await mongo_db.connect()
 
     try:
