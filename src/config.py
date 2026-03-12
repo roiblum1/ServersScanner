@@ -139,9 +139,11 @@ class VendorConfig:
             }
         elif vendor_upper == "CISCO":
             return {
-                "ip": cls.UCS_CENTRAL_IP,
-                "username": cls.UCS_CENTRAL_USERNAME,
-                "password": cls.UCS_CENTRAL_PASSWORD
+                "central_ip": cls.UCS_CENTRAL_IP,
+                "central_username": cls.UCS_CENTRAL_USERNAME,
+                "central_password": cls.UCS_CENTRAL_PASSWORD,
+                "manager_username": cls.UCS_MANAGER_USERNAME,
+                "manager_password": cls.UCS_MANAGER_PASSWORD,
             }
         else:
             raise ValueError(f"Unknown vendor: {vendor}")

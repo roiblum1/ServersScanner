@@ -8,6 +8,8 @@ including maintenance sub-document management.
 import logging
 from typing import List, Optional
 
+from pydantic import ValidationError
+
 from ...models.api_responses import MaintenanceInfo
 from ...models.server_document import ServerDocument
 from .mongo_client import MongoDatabase
@@ -59,7 +61,10 @@ class ServerRepository:
         cursor = self._collection.find({})
         docs = []
         async for raw in cursor:
-            docs.append(ServerDocument.model_validate(raw))
+            try:
+                docs.append(ServerDocument.model_validate(raw))
+            except ValidationError as e:
+                logger.error(f"Skipping invalid server document '{raw.get('_id')}': {e}")
         logger.debug(f"Retrieved {len(docs)} server documents from MongoDB")
         return docs
 
@@ -67,7 +72,11 @@ class ServerRepository:
         """Return a single server document by name."""
         raw = await self._collection.find_one({"_id": name})
         if raw:
-            return ServerDocument.model_validate(raw)
+            try:
+                return ServerDocument.model_validate(raw)
+            except ValidationError as e:
+                logger.error(f"Invalid server document '{name}': {e}")
+                return None
         return None
 
     async def set_maintenance(self, name: str, info: MaintenanceInfo) -> None:

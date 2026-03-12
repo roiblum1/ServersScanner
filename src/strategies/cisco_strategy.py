@@ -44,17 +44,14 @@ class CiscoStrategy(VendorStrategy):
         try:
             from ucscsdk.ucschandle import UcscHandle
             from ucsmsdk.ucshandle import UcsHandle
-            from ..config import AppConfig
 
             self._ucsc_handle = UcscHandle(
                 central_ip,
                 self.credentials['central_username'],
                 self.credentials['central_password'],
-                secure=AppConfig.TLS_VERIFY,
             )
             self._ucsc_handle.login()
             self._UcsHandle = UcsHandle
-            self._tls_verify = AppConfig.TLS_VERIFY
             logger.info("Successfully connected to Cisco UCS Central")
 
         except ImportError:
@@ -94,7 +91,6 @@ class CiscoStrategy(VendorStrategy):
                         domain,
                         self.credentials['manager_username'],
                         self.credentials['manager_password'],
-                        secure=getattr(self, '_tls_verify', False),
                     )
 
                     logger.debug(f"Attempting login to UCS Manager at {domain}...")
@@ -206,8 +202,7 @@ class CiscoStrategy(VendorStrategy):
 
                 for srv in domain_servers:
                     kvm_ip = mac_address = None
-                    cpu_model = cpu_count = cpu_cores = memory_gb = model = serial = None
-                    disks: list = []
+                    cpu_model = cpu_count = cpu_cores = memory_gb = model = serial = total_disk_gb = None
 
                     try:
                         details = self._ucsc_handle.query_dn(srv.dn)
@@ -215,43 +210,16 @@ class CiscoStrategy(VendorStrategy):
                             kvm_ip = self._extract_ucs_management_ip(ucsm_handle, details)
                             mac_address = self._extract_ucs_mac_address(ucsm_handle, details)
 
-                        # Physical node hardware via pnDn
-                        pn_dn = getattr(srv, "pn_dn", None) or getattr(srv, "pnDn", None)
-                        if pn_dn:
-                            compute_node = ucsm_handle.query_dn(pn_dn)
-                            if compute_node:
-                                raw_cpus = getattr(compute_node, "num_of_cpus", None)
-                                cpu_count = int(raw_cpus) if raw_cpus else None
-                                raw_mem = getattr(compute_node, "total_memory", None)
-                                memory_gb = round(int(raw_mem) / 1024, 1) if raw_mem else None
-                                model = getattr(compute_node, "model", None)
-                                serial = getattr(compute_node, "serial", None)
+                        hw = self._get_physical_hardware(ucsm_handle, srv)
+                        if hw:
+                            model = hw.get("model")
+                            serial = hw.get("serial")
+                            memory_gb = hw.get("memory_gb")
+                            cpu_model = hw.get("cpu_model")
+                            cpu_count = hw.get("cpu_count")
+                            cpu_cores = hw.get("cpu_cores")
+                            total_disk_gb = hw.get("total_disk_gb")
 
-                                try:
-                                    procs = ucsm_handle.query_children(
-                                        in_mo=compute_node, class_id="ProcessorUnit"
-                                    )
-                                    if procs:
-                                        cpu_model = getattr(procs[0], "model", None)
-                                        raw_cores = getattr(procs[0], "cores", None)
-                                        cpu_cores = int(raw_cores) if raw_cores else None
-                                except Exception:
-                                    pass
-
-                                try:
-                                    storage_disks = ucsm_handle.query_children(
-                                        in_mo=compute_node, class_id="StorageLocalDisk"
-                                    )
-                                    for disk in storage_disks:
-                                        raw_size = getattr(disk, "size", None)
-                                        size_mb = int(raw_size) if raw_size else 0
-                                        disks.append({
-                                            "size_gb": round(size_mb / 1024, 1) if size_mb else None,
-                                            "type": getattr(disk, "disk_type", None),
-                                            "model": getattr(disk, "model", None),
-                                        })
-                                except Exception:
-                                    pass
                     except Exception as e:
                         logger.warning(f"Cisco: could not get details for '{srv.name}': {e}")
 
@@ -267,7 +235,7 @@ class CiscoStrategy(VendorStrategy):
                         "memory_gb": memory_gb,
                         "model": model,
                         "serial": serial,
-                        "disks": disks,
+                        "total_disk_gb": total_disk_gb,
                         "last_scanned": now,
                     }))
 
@@ -283,76 +251,77 @@ class CiscoStrategy(VendorStrategy):
         logger.info(f"Cisco: collected full data for {len(docs)} servers")
         return docs
 
-    def _get_domain_server_details(self, domain: str, servers: List) -> Dict[str, Dict]:
+    def _get_physical_hardware(self, ucsm_handle, srv) -> Optional[Dict]:
         """
-        Connect to UCS Manager domain once and fetch details for all servers.
-        Returns cache dict: {server_dn: {mac, kvm_ip}}
+        Extract hardware details using the correct UCS SDK object hierarchy:
+          srv (lsServer)
+            └── pn_dn → ComputeBlade / ComputeRackUnit  (physical server)
+                  ├── model, serial, total_memory
+                  └── ComputeBoard
+                        ├── ProcessorUnit  (CPUs)
+                        └── StorageController
+                              └── StorageLocalDisk  (disks)
         """
-        details_cache = {}
-        ucsm_handle = None
+        pn_dn = getattr(srv, "pn_dn", None) or getattr(srv, "pnDn", None)
+        if not pn_dn:
+            logger.warning(f"Cisco: no physical DN for '{srv.name}'")
+            return None
 
+        physical_server = ucsm_handle.query_dn(pn_dn)
+        if not physical_server:
+            logger.warning(f"Cisco: could not query physical server at DN: {pn_dn}")
+            return None
+
+        raw_mem = getattr(physical_server, "total_memory", None)
+        hw = {
+            "model": getattr(physical_server, "model", None),
+            "serial": getattr(physical_server, "serial", None),
+            "memory_gb": round(int(raw_mem) / 1024, 1) if raw_mem else None,
+            "cpu_model": None,
+            "cpu_count": None,
+            "cpu_cores": None,
+            "total_disk_gb": None,
+        }
+
+        # ComputeBoard is the parent of CPUs and storage controllers
         try:
-            # Connect to UCS Manager for this domain
-            ucsm_handle = self._UcsHandle(
-                domain,
-                self.credentials['manager_username'],
-                self.credentials['manager_password']
-            )
-            ucsm_handle.login()
-            logger.info(f"Connected to UCS Manager at {domain}")
-
-            # Fetch details for each server (querying children is relatively fast)
-            for server in servers:
-                try:
-                    server_details = self._ucsc_handle.query_dn(server.dn)
-                    if not server_details:
-                        continue
-
-                    result = {}
-
-                    # Extract KVM IP
-                    mgmt_interfaces = ucsm_handle.query_children(
-                        in_mo=server_details,
-                        class_id="VnicIpV4PooledAddr"
-                    )
-                    for iface in mgmt_interfaces:
-                        if hasattr(iface, "addr") and iface.addr:
-                            result["kvm_ip"] = str(iface.addr)
-                            break
-
-                    # Extract MAC address
-                    adapters = ucsm_handle.query_children(
-                        in_mo=server_details,
-                        class_id="VnicEther"
-                    )
-                    if adapters:
-                        sorted_adapters = sorted(
-                            adapters,
-                            key=lambda x: x.name[3:] if len(x.name) > 3 else x.name
-                        )
-                        if sorted_adapters and hasattr(sorted_adapters[0], "addr"):
-                            result["mac"] = sorted_adapters[0].addr
-
-                    if result:
-                        details_cache[server.dn] = result
-
-                except Exception as e:
-                    logger.debug(f"Could not get details for server {server.name}: {e}")
-
-            logger.info(f"Cached details for {len(details_cache)} servers from domain {domain}")
-
+            boards = ucsm_handle.query_children(in_mo=physical_server, class_id="ComputeBoard")
+            if not boards:
+                logger.warning(f"Cisco: no ComputeBoard found under {pn_dn}")
+                return hw
+            board = boards[0]
         except Exception as e:
-            logger.error(f"Error connecting to UCS Manager at {domain}: {e}")
+            logger.warning(f"Cisco: failed to get ComputeBoard for '{srv.name}': {e}")
+            return hw
 
-        finally:
-            if ucsm_handle:
-                try:
-                    ucsm_handle.logout()
-                    logger.debug(f"Disconnected from UCS Manager at {domain}")
-                except Exception:
-                    pass
+        # CPUs: ProcessorUnit children of ComputeBoard
+        try:
+            cpus = [
+                c for c in ucsm_handle.query_children(in_mo=board, class_id="ProcessorUnit")
+                if getattr(c, "presence", "") == "equipped"
+            ]
+            if cpus:
+                hw["cpu_model"] = getattr(cpus[0], "model", None)
+                raw_cores = getattr(cpus[0], "cores", None)
+                hw["cpu_cores"] = int(raw_cores) if raw_cores else None
+                hw["cpu_count"] = len(cpus)
+        except Exception as e:
+            logger.warning(f"Cisco: failed to get CPUs for '{srv.name}': {e}")
 
-        return details_cache
+        # Disks: StorageController → StorageLocalDisk
+        try:
+            controllers = ucsm_handle.query_children(in_mo=board, class_id="StorageController")
+            size_sum_mb = 0
+            for ctrl in controllers:
+                for disk in ucsm_handle.query_children(in_mo=ctrl, class_id="StorageLocalDisk"):
+                    if getattr(disk, "presence", "") == "equipped":
+                        raw_size = getattr(disk, "size", None)
+                        size_sum_mb += int(raw_size) if raw_size else 0
+            hw["total_disk_gb"] = round(size_sum_mb / 1024, 1) if size_sum_mb else None
+        except Exception as e:
+            logger.warning(f"Cisco: failed to get disks for '{srv.name}': {e}")
+
+        return hw
 
     def _extract_ucs_management_ip(self, ucsm_handle, server_details) -> Optional[str]:
         """Extract KVM IP from server details"""

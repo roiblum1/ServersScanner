@@ -19,6 +19,8 @@ const state = {
     statusFilter: 'all',   // 'all' | 'available' | 'installed' | 'maintenance'
     searchQuery: '',
     allZones: [],          // full zone list from unfiltered load
+    page: 1,
+    pageSize: 500,
 };
 
 // ============================================================================
@@ -50,8 +52,11 @@ function setupEventListeners() {
     document.getElementById('refreshBtn').addEventListener('click', () => loadData());
     document.getElementById('clearBtn').addEventListener('click', clearFilters);
 
-    // Zone dropdown — reload data on selection change
-    document.getElementById('zoneFilter').addEventListener('change', () => loadData());
+    // Zone dropdown — reload data on selection change (reset to page 1)
+    document.getElementById('zoneFilter').addEventListener('change', () => {
+        state.page = 1;
+        loadData();
+    });
 
     // Server name search — live client-side filter
     document.getElementById('serverSearch').addEventListener('input', e => {
@@ -83,7 +88,7 @@ function setupEventListeners() {
 // ============================================================================
 // Data Loading
 // ============================================================================
-async function loadData() {
+async function loadData(forceRefresh = false) {
     if (state.isLoading) return;
     state.isLoading = true;
 
@@ -97,9 +102,10 @@ async function loadData() {
     zonesDiv.innerHTML = '';
 
     try {
-        const url = zoneFilter
-            ? `/api/servers?zone_filter=${encodeURIComponent(zoneFilter)}`
-            : '/api/servers';
+        const params = new URLSearchParams({ page: state.page, page_size: state.pageSize });
+        if (zoneFilter) params.set('zone_filter', zoneFilter);
+        if (forceRefresh) params.set('force_refresh', 'true');
+        const url = `/api/servers?${params}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -111,6 +117,7 @@ async function loadData() {
         renderZoneDashboard(data.zones);
         renderZones(data.zones);
         renderClusters(data.clusters);
+        renderPagination(data.pagination);
 
         // Only update the full zone list when loading unfiltered (all zones)
         const selectedZone = document.getElementById('zoneFilter').value;
@@ -176,11 +183,48 @@ function applyClientFilters() {
     });
 }
 
+// ============================================================================
+// Pagination
+// ============================================================================
+function renderPagination(pagination) {
+    const el = document.getElementById('pagination');
+    if (!pagination || pagination.total_pages <= 1) {
+        el.style.display = 'none';
+        return;
+    }
+
+    const { page, total_pages, total, page_size } = pagination;
+    const from = (page - 1) * page_size + 1;
+    const to = Math.min(page * page_size, total);
+
+    el.innerHTML = '';
+    el.style.display = 'flex';
+
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '← Prev';
+    prevBtn.disabled = page <= 1;
+    prevBtn.addEventListener('click', () => { state.page = page - 1; loadData(); });
+
+    const info = document.createElement('span');
+    info.className = 'page-info';
+    info.textContent = `${from}–${to} of ${total}`;
+
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = 'Next →';
+    nextBtn.disabled = page >= total_pages;
+    nextBtn.addEventListener('click', () => { state.page = page + 1; loadData(); });
+
+    el.appendChild(prevBtn);
+    el.appendChild(info);
+    el.appendChild(nextBtn);
+}
+
 function clearFilters() {
     document.getElementById('serverSearch').value = '';
     document.getElementById('zoneFilter').value = '';
     state.searchQuery = '';
     state.statusFilter = 'all';
+    state.page = 1;
     document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
     document.querySelector('.pill[data-status="all"]').classList.add('active');
     loadData();
@@ -395,13 +439,10 @@ function createServerCard(server) {
     return card;
 }
 
-function summarizeDisks(disks) {
-    const groups = {};
-    disks.forEach(d => {
-        const key = `${d.size_gb ? d.size_gb + 'GB' : '?'}${d.type ? ' ' + d.type : ''}`;
-        groups[key] = (groups[key] || 0) + (d.count || 1);
-    });
-    return Object.entries(groups).map(([k, n]) => `${n}× ${k}`).join(', ');
+function formatDiskSize(total_disk_gb) {
+    if (!total_disk_gb) return null;
+    if (total_disk_gb >= 1024) return `${(total_disk_gb / 1024).toFixed(1)} TB`;
+    return `${total_disk_gb} GB`;
 }
 
 function getVendorIcon(v) {
@@ -494,7 +535,7 @@ function openServerModal(server, focusMaintenance) {
         ['Serial', server.serial],
         ['CPU', formatCPU(server)],
         ['Memory', server.memory_gb ? `${server.memory_gb} GB` : null],
-        ['Storage', server.disks && server.disks.length ? summarizeDisks(server.disks) : null],
+        ['Storage', formatDiskSize(server.total_disk_gb)],
     ].filter(([, v]) => v);
 
     const hwGrid = document.getElementById('hwGrid');
@@ -569,6 +610,40 @@ function closeServerModal() {
     currentServer = null;
 }
 
+function updateCardInPlace(server) {
+    const card = document.querySelector(`.server-card[data-name="${server.name.toLowerCase()}"]`);
+    if (!card) return;
+
+    // Update classes and data attributes
+    card.className = `server-card ${server.status}`;
+    card.dataset.status = server.status;
+
+    // Update status dot
+    const dot = card.querySelector('.status-indicator');
+    if (dot) dot.className = `status-indicator ${server.status}`;
+
+    // Update or remove maintenance banner
+    const existing = card.querySelector('.card-maint-banner');
+    if (existing) existing.remove();
+    if (server.maintenance) {
+        const banner = document.createElement('div');
+        banner.className = 'card-maint-banner';
+        banner.innerHTML = `<span class="severity-badge ${server.maintenance.severity}">${server.maintenance.severity.toUpperCase()}</span> ${server.maintenance.reason}`;
+        card.querySelector('.server-info').appendChild(banner);
+    }
+
+    // Update maintenance button
+    const btn = card.querySelector('.card-maint-btn');
+    if (btn) {
+        btn.className = `card-maint-btn ${server.status === 'maintenance' ? 'is-maint' : ''}`;
+        btn.title = server.status === 'maintenance' ? 'View / remove maintenance' : 'Set maintenance';
+        btn.innerHTML = server.status === 'maintenance' ? '⚠️' : '🔧';
+    }
+
+    // Re-apply client filters so status pill filter stays correct
+    applyClientFilters();
+}
+
 async function submitMaintenance() {
     const reason = document.getElementById('maintenanceReason').value.trim();
     if (!reason) {
@@ -584,8 +659,11 @@ async function submitMaintenance() {
             body: JSON.stringify({ reason, severity, timestamp: new Date().toISOString(), created_by: null }),
         });
         if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+        // Update in-place: patch currentServer and re-render just the card
+        currentServer.maintenance = { reason, severity, timestamp: new Date().toISOString(), created_by: null };
+        currentServer.status = 'maintenance';
+        updateCardInPlace(currentServer);
         closeServerModal();
-        loadData();
     } catch (err) {
         alert(`Error: ${err.message}`);
     }
@@ -596,8 +674,11 @@ async function removeMaintenance() {
     try {
         const res = await fetch(`/api/servers/${encodeURIComponent(currentServer.name)}/maintenance`, { method: 'DELETE' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Update in-place: patch currentServer and re-render just the card
+        currentServer.maintenance = null;
+        currentServer.status = 'available';
+        updateCardInPlace(currentServer);
         closeServerModal();
-        loadData();
     } catch (err) {
         alert(`Error: ${err.message}`);
     }

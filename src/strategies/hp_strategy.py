@@ -203,24 +203,18 @@ class HPStrategy(VendorStrategy):
                 "memory_gb": mem.get("totalSystemMemoryGiB"),
                 "model": hardware.get("model"),
                 "serial": hardware.get("serialNumber") or profile.get("serialNumber"),
-                "disks": self._extract_disks(hardware),
+                "total_disk_gb": self._extract_total_disk_gb(hardware),
                 "last_scanned": now,
             }))
 
         logger.info(f"HP: collected full data for {len(docs)} servers (2 bulk API calls total)")
         return docs
 
-    def _extract_disks(self, hardware: dict) -> list:
-        """Extract local disk info from HP hardware response"""
-        disks = []
+    def _extract_total_disk_gb(self, hardware: dict) -> Optional[float]:
+        """Sum total local disk capacity in GB from HP hardware response"""
         storage = hardware.get("localStorage", {})
-        for drive in storage.get("drives", []):
-            disks.append({
-                "size_gb": drive.get("capacityInGB"),
-                "type": drive.get("driveMedia"),
-                "model": drive.get("model"),
-            })
-        return disks
+        total = sum(drive.get("capacityInGB") or 0 for drive in storage.get("drives", []))
+        return round(total, 1) if total else None
 
     def _extract_ilo_ip(self, hardware: dict) -> Optional[str]:
         """Extract iLO IP from hardware data"""

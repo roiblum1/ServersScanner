@@ -11,10 +11,13 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Optional
 
+import math
+
 from ..models.api_responses import (
     CacheInfo,
     ClusterStats,
     DashboardData,
+    PaginationInfo,
     ServerInfo,
     ZoneData,
 )
@@ -45,13 +48,15 @@ class DashboardService:
     async def build_dashboard(
         self,
         zone_filter: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 500,
     ) -> DashboardData:
         """
         Build complete dashboard data.
 
         1. Load all server documents from MongoDB
         2. Query Kubernetes live
-        3. Assemble and return DashboardData
+        3. Paginate, assemble, and return DashboardData
         """
         logger.info("Loading server data from MongoDB...")
         docs = await self.server_repo.get_all_servers()
@@ -59,6 +64,19 @@ class DashboardService:
         if zone_filter:
             allowed = {z.strip().lower() for z in zone_filter.split(",") if z.strip()}
             docs = [d for d in docs if not d.zone or d.zone.lower() in allowed]
+
+        # Pagination — sort first so pages are stable
+        total = len(docs)
+        docs.sort(key=lambda d: d.id)
+        offset = (page - 1) * page_size
+        docs = docs[offset: offset + page_size]
+        total_pages = math.ceil(total / page_size) if page_size else 1
+        pagination = PaginationInfo(
+            page=page,
+            page_size=page_size,
+            total=total,
+            total_pages=total_pages,
+        )
 
         if self.k8s_repo is not None:
             logger.info(f"Querying Kubernetes for installed servers ({len(docs)} MongoDB docs)...")
@@ -69,13 +87,14 @@ class DashboardService:
             installed_by_cluster = {}
             agent_details = {}
 
-        return self._assemble_dashboard(docs, installed_by_cluster, agent_details)
+        return self._assemble_dashboard(docs, installed_by_cluster, agent_details, pagination)
 
     def _assemble_dashboard(
         self,
         docs,
         installed_by_cluster: Dict[str, List[str]],
         agent_details: Dict,
+        pagination: PaginationInfo,
     ) -> DashboardData:
         """Merge MongoDB documents with live K8s data into DashboardData."""
         all_installed: set = set()
@@ -107,7 +126,7 @@ class DashboardService:
                             None,
                         )
                         agent = agent_details.get(normalized)
-                        deployment_cluster = agent.deployment_cluster if agent else None
+                        deployment_cluster = getattr(agent, "deployment_cluster", None) if agent else None
                     else:
                         status = "available"
                         cluster = None
@@ -130,7 +149,7 @@ class DashboardService:
                         memory_gb=doc.memory_gb,
                         model=doc.model,
                         serial=doc.serial,
-                        disks=doc.disks,
+                        total_disk_gb=doc.total_disk_gb,
                     ))
 
                 vendors_data[vendor] = servers_info
@@ -180,4 +199,5 @@ class DashboardService:
                 age_seconds=0,
                 next_refresh_seconds=self.cache_ttl,
             ),
+            pagination=pagination,
         )

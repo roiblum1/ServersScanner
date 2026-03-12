@@ -6,19 +6,11 @@ This is the shared contract between the CronJob write path
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .api_responses import MaintenanceInfo
-
-
-class DiskInfo(BaseModel):
-    """Disk/storage device information"""
-    size_gb: Optional[float] = None
-    type: Optional[str] = None   # "SSD", "HDD", etc.
-    model: Optional[str] = None
-    count: Optional[int] = None
 
 
 class ServerDocument(BaseModel):
@@ -43,7 +35,7 @@ class ServerDocument(BaseModel):
     memory_gb: Optional[float] = None
     model: Optional[str] = None
     serial: Optional[str] = None
-    disks: List[Dict[str, Any]] = Field(default_factory=list)
+    total_disk_gb: Optional[float] = None
 
     # Maintenance (written by API, preserved by CronJob upserts)
     maintenance: Optional[MaintenanceInfo] = None

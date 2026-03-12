@@ -197,14 +197,13 @@ class DellStrategy(VendorStrategy):
                 device_id = device.get("Id")
 
                 mac_address = None
-                cpu_model = cpu_count = cpu_cores = memory_gb = None
-                disks: list = []
+                cpu_model = cpu_count = cpu_cores = memory_gb = total_disk_gb = None
 
                 if hardware_details and device_id:
                     try:
-                        mac_address = self._get_device_mac(device_id)
-                    except Exception:
-                        pass
+                        mac_address = self._get_device_mac(device_id, name)
+                    except Exception as e:
+                        logger.warning(f"Dell: failed to get MAC for '{name}': {e}")
 
                     try:
                         resp = self._http_client.get(
@@ -213,11 +212,11 @@ class DellStrategy(VendorStrategy):
                         processors = resp.json().get("InventoryInfo", [])
                         if processors:
                             p = processors[0]
-                            cpu_model = p.get("Family") or p.get("ProcessorName") or p.get("Model")
+                            cpu_model = p.get("Family") or p.get("ModelName")
                             cpu_count = len(processors)
                             cpu_cores = p.get("NumberOfCores")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Dell: failed to get CPU for '{name}': {e}")
 
                     try:
                         resp = self._http_client.get(
@@ -226,22 +225,20 @@ class DellStrategy(VendorStrategy):
                         mem_modules = resp.json().get("InventoryInfo", [])
                         total_mb = sum(m.get("Size", 0) or 0 for m in mem_modules)
                         memory_gb = round(total_mb / 1024, 1) if total_mb else None
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Dell: failed to get memory for '{name}': {e}")
 
                     try:
                         resp = self._http_client.get(
                             f"/DeviceService/Devices({device_id})/InventoryDetails('serverStorage')"
                         )
-                        for drv in resp.json().get("InventoryInfo", []):
-                            size_mb = drv.get("Size") or 0
-                            disks.append({
-                                "size_gb": round(size_mb / 1024, 1) if size_mb else None,
-                                "type": drv.get("MediaType"),
-                                "model": drv.get("Model"),
-                            })
-                    except Exception:
-                        pass
+                        size_sum_mb = sum(
+                            drv.get("Size") or 0
+                            for drv in resp.json().get("InventoryInfo", [])
+                        )
+                        total_disk_gb = round(size_sum_mb / 1024, 1) if size_sum_mb else None
+                    except Exception as e:
+                        logger.warning(f"Dell: failed to get storage for '{name}': {e}")
 
                 docs.append(ServerDocument(**{
                     "_id": name,
@@ -255,7 +252,7 @@ class DellStrategy(VendorStrategy):
                     "memory_gb": memory_gb,
                     "model": device.get("Model"),
                     "serial": device.get("DeviceServiceTag"),
-                    "disks": disks,
+                    "total_disk_gb": total_disk_gb,
                     "last_scanned": now,
                 }))
 
@@ -269,41 +266,6 @@ class DellStrategy(VendorStrategy):
 
         logger.info(f"Dell: collected data for {len(docs)} servers")
         return docs
-
-    def _build_device_cache(self) -> Dict[str, Dict]:
-        """Build cache of devices by iDRAC IP for quick lookup"""
-        logger.info("Fetching all devices from Dell OME...")
-        cache = {}
-
-        # STEP 1: Fetch all devices with basic info using paginated fetcher
-        paginator = OffsetLimitPaginator(page_size=100, items_key="value")
-        fetcher = PaginatedFetcher(self._http_client, paginator)
-        all_devices = fetcher.fetch_all("/DeviceService/Devices")
-
-        logger.info(f"Found {len(all_devices)} devices in Dell OME")
-
-        # STEP 2: Build cache and fetch MACs (unfortunately Dell requires per-device calls for inventory)
-        for device in all_devices:
-            device_name = str(device.get("DeviceName", ""))
-            device_id = device.get("Id")
-
-            cache[device_name] = {
-                "id": device_id,
-                "model": device.get("Model"),
-                "serial": device.get("DeviceServiceTag")
-            }
-
-            # Get MAC address from inventory
-            # Note: Dell OME API doesn't support batch inventory queries
-            try:
-                mac = self._get_device_mac(device_id)
-                if mac:
-                    cache[device_name]["mac"] = mac
-            except Exception as e:
-                logger.debug(f"Could not get MAC for device {device_id}: {e}")
-
-        logger.info(f"Cached {len(cache)} device entries with MACs")
-        return cache
 
     def _get_dell_mac_address(self, idrac_ip: str, server_name: str) -> Optional[str]:
         """Get MAC address for a specific server by iDRAC IP (used in single server lookup)"""
@@ -333,7 +295,7 @@ class DellStrategy(VendorStrategy):
             logger.debug(f"Network interfaces found: {len(network_interfaces)} for device {device_id}")
 
             if network_interfaces:
-                mac_address = self._extract_mac_from_interfaces(network_interfaces, server_name)
+                mac_address = self._extract_mac_by_server_type(network_interfaces, server_name, device_id)
                 if mac_address:
                     logger.info(f"MAC address found for server {server_name}: {mac_address}")
                     return mac_address
@@ -344,35 +306,92 @@ class DellStrategy(VendorStrategy):
         logger.error(f"Device with iDRAC IP '{idrac_ip}' not found in Dell OME after checking {len(all_devices)} devices")
         return None
 
-    def _extract_mac_from_interfaces(self, network_interfaces: list, server_name: str) -> Optional[str]:
-        """Extract MAC address from network interfaces (simple first interface logic)"""
-        try:
-            if network_interfaces:
-                first_interface = network_interfaces[0]
-                ports = first_interface.get("Ports", [])
-                if ports:
-                    partitions = ports[0].get("Partitions", [])
-                    if partitions:
-                        return partitions[0].get("CurrentMacAddress")
-        except Exception as e:
-            logger.debug(f"Failed to extract MAC from interfaces for {server_name}: {e}")
-        return None
+    def _extract_mac_by_server_type(self, network_interfaces: list, server_name: str, device_id: int) -> Optional[str]:
+        """
+        Extract MAC address based on server type.
 
-    def _get_device_mac(self, device_id: int) -> Optional[str]:
-        """Get MAC address from device inventory (used in bulk scanning cache)"""
+        Server types:
+        - H100/H200: Uses 3rd network interface (index 2)
+        - Data servers: Uses last interface, last port, last partition
+        - Default: Uses first interface, first port, first partition
+        """
+        server_name_lower = server_name.lower()
+
+        try:
+            # H100/H200 servers: use 3rd NIC (index 2)
+            if "h100" in server_name_lower or "h200" in server_name_lower:
+                logger.info(f"Detected H100/H200 server: {server_name}, using 3rd network interface")
+
+                if len(network_interfaces) < 3:
+                    logger.error(f"H100/H200 server {server_name} has only {len(network_interfaces)} interfaces, expected at least 3")
+                    return None
+
+                third_interface = network_interfaces[2]
+                ports = third_interface.get("Ports", [])
+                logger.info(f"H100/H200: Found {len(ports)} ports in 3rd interface")
+
+                if not ports:
+                    logger.error(f"No ports found in 3rd interface for H100/H200 device {device_id}")
+                    return None
+
+                first_port = ports[0]
+                partitions = first_port.get("Partitions", [])
+                logger.info(f"H100/H200: Found {len(partitions)} partitions in first port")
+
+                if not partitions:
+                    logger.error(f"No partitions found in first port of 3rd interface for H100/H200 device {device_id}")
+                    return None
+
+                return partitions[0].get("CurrentMacAddress")
+
+            # Data servers: use last interface, last port, last partition
+            elif "data" in server_name_lower:
+                logger.info(f"Using 'data' server logic for {server_name}")
+                last_interface = network_interfaces[-1]
+                ports = last_interface.get("Ports", [])
+                if not ports:
+                    logger.error(f"No ports found in last interface for data device {device_id}")
+                    return None
+                last_port = ports[-1]
+                partitions = last_port.get("Partitions", [])
+                if not partitions:
+                    logger.error(f"No partitions found in last port for data device {device_id}")
+                    return None
+                return partitions[-1].get("CurrentMacAddress")
+
+            # Default: use first interface, first port, first partition
+            else:
+                first_interface = network_interfaces[0]
+                logger.info(f"Using default logic - First interface: {first_interface}")
+                ports = first_interface.get("Ports", [])
+                logger.info(f"Ports found: {len(ports)} ports")
+
+                if not ports:
+                    logger.error(f"No ports found in first interface for device {device_id}")
+                    return None
+
+                first_port = ports[0]
+                partitions = first_port.get("Partitions", [])
+                logger.info(f"Partitions found: {len(partitions)} partitions")
+
+                if not partitions:
+                    logger.error(f"No partitions found in first port for device {device_id}")
+                    return None
+
+                return partitions[0].get("CurrentMacAddress")
+
+        except Exception as e:
+            logger.error(f"Failed to extract MAC from inventory for device {device_id}: {e}")
+            return None
+
+    def _get_device_mac(self, device_id: int, server_name: str) -> Optional[str]:
+        """Get MAC address from device inventory (used in bulk scanning)"""
         try:
             url = f"/DeviceService/Devices({device_id})/InventoryDetails('serverNetworkInterfaces')"
             response = self._http_client.get(url)
-            data = response.json()
-
-            interfaces = data.get("InventoryInfo", [])
+            interfaces = response.json().get("InventoryInfo", [])
             if interfaces:
-                first_interface = interfaces[0]
-                ports = first_interface.get("Ports", [])
-                if ports:
-                    partitions = ports[0].get("Partitions", [])
-                    if partitions:
-                        return partitions[0].get("CurrentMacAddress")
+                return self._extract_mac_by_server_type(interfaces, server_name, device_id)
         except Exception:
             pass
         return None

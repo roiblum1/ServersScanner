@@ -5,7 +5,7 @@ Provides type-safe Pydantic models for all API responses with validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal
 
 
 class MaintenanceInfo(BaseModel):
@@ -35,7 +35,15 @@ class ServerInfo(BaseModel):
     memory_gb: Optional[float] = None
     model: Optional[str] = None
     serial: Optional[str] = None
-    disks: List[Dict[str, Any]] = Field(default_factory=list)
+    total_disk_gb: Optional[float] = None
+
+
+class PaginationInfo(BaseModel):
+    """Pagination metadata"""
+    page: int = Field(..., ge=1, description="Current page (1-based)")
+    page_size: int = Field(..., ge=1, description="Servers per page")
+    total: int = Field(..., ge=0, description="Total matching servers")
+    total_pages: int = Field(..., ge=0, description="Total pages")
 
 
 class ZoneData(BaseModel):
@@ -64,6 +72,7 @@ class DashboardData(BaseModel):
     clusters: List[ClusterStats] = Field(..., description="Cluster statistics")
     summary: Dict[str, int] = Field(..., description="Summary statistics")
     cache_info: CacheInfo = Field(..., description="Cache metadata")
+    pagination: Optional[PaginationInfo] = Field(None, description="Pagination metadata")
 
 
 class StatusResponse(BaseModel):

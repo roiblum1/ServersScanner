@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List
 
+UPSERT_MAX_RETRIES = 3
+
 from ..strategies.base_strategy import VendorStrategy
 from ..storage.database.server_repository import ServerRepository
 
@@ -77,13 +79,23 @@ class SyncService:
                 logger.info(f"[{vendor}] Fetched {len(docs)} servers → upserting to MongoDB")
 
                 for doc in docs:
-                    try:
-                        await self.server_repo.upsert_server(doc)
-                        result.n_upserted += 1
-                    except Exception as e:
-                        msg = f"[{vendor}] Failed to upsert '{doc.id}': {e}"
-                        logger.error(msg)
-                        result.errors.append(msg)
+                    for attempt in range(1, UPSERT_MAX_RETRIES + 1):
+                        try:
+                            await self.server_repo.upsert_server(doc)
+                            result.n_upserted += 1
+                            break
+                        except Exception as e:
+                            if attempt < UPSERT_MAX_RETRIES:
+                                wait = 2 ** (attempt - 1)
+                                logger.warning(
+                                    f"[{vendor}] Upsert attempt {attempt}/{UPSERT_MAX_RETRIES} "
+                                    f"failed for '{doc.id}', retrying in {wait}s: {e}"
+                                )
+                                await asyncio.sleep(wait)
+                            else:
+                                msg = f"[{vendor}] Failed to upsert '{doc.id}' after {UPSERT_MAX_RETRIES} attempts: {e}"
+                                logger.error(msg)
+                                result.errors.append(msg)
 
             except Exception as e:
                 msg = f"[{vendor}] Strategy error: {e}"

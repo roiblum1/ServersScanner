@@ -975,6 +975,47 @@ h1 {
 }
 
 /* ============================================================================
+   Pagination
+   ============================================================================ */
+.pagination-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    padding: var(--space-md) 0 var(--space-lg);
+    flex-wrap: wrap;
+}
+
+.pagination-bar .page-info {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    min-width: 120px;
+    text-align: center;
+}
+
+.pagination-bar button {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.pagination-bar button:hover:not(:disabled) {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #fff;
+}
+
+.pagination-bar button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+/* ============================================================================
    Scrollbar
    ============================================================================ */
 ::-webkit-scrollbar {
