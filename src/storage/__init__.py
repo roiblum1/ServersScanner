@@ -1,4 +1,4 @@
-"""Storage layer for persistent data"""
-from .maintenance_store import MaintenanceStore, MaintenanceRecord
+"""Storage layer — MongoDB persistence"""
+from .database import MongoDatabase, ServerRepository
 
-__all__ = ['MaintenanceStore', 'MaintenanceRecord']
+__all__ = ["MongoDatabase", "ServerRepository"]

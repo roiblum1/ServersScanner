@@ -1363,6 +1363,284 @@ h1 {
     }
 }
 
+/* ============================================================================
+   Status Filter Pills
+   ============================================================================ */
+.status-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.pill {
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--stroke);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-display);
+    transition: all var(--ease-fast);
+}
+
+.pill:hover { border-color: var(--stroke-strong); color: var(--text-primary); }
+.pill.active { background: var(--bg-elevated-2); border-color: var(--stroke-strong); color: var(--text-primary); }
+.pill.active.available { border-color: var(--success); color: var(--success); }
+.pill.active.installed { border-color: var(--danger); color: var(--danger); }
+.pill.active.maintenance { border-color: var(--color-maintenance); color: var(--color-maintenance); }
+
+/* Match count */
+.match-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: var(--space-sm);
+    padding-left: 4px;
+}
+
+/* ============================================================================
+   Enhanced Server Card
+   ============================================================================ */
+.server-card {
+    cursor: pointer;
+    position: relative;
+    background: rgba(10, 16, 26, 0.8);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    padding: 14px 16px;
+    display: flex;
+    gap: var(--space-sm);
+    align-items: flex-start;
+    transition: border 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+    padding-right: 48px; /* room for maint button */
+}
+
+.server-card:hover {
+    border-color: var(--stroke-strong);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.server-hw-row {
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    color: var(--text-muted);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.server-specs-row {
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+.accent-text { color: var(--accent) !important; }
+
+/* Maintenance card banner */
+.card-maint-banner {
+    margin-top: 6px;
+    font-size: 0.78rem;
+    color: var(--color-maintenance);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.card-maint-banner .severity-badge {
+    font-size: 0.65rem;
+    padding: 2px 7px;
+}
+
+/* Maintenance quick-action button on card */
+.card-maint-btn {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    width: 30px;
+    height: 30px;
+    background: rgba(15,23,42,0.7);
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius-sm);
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--ease-fast);
+    opacity: 0.5;
+    line-height: 1;
+}
+
+.server-card:hover .card-maint-btn,
+.card-maint-btn.is-maint {
+    opacity: 1;
+}
+
+.card-maint-btn:hover {
+    border-color: var(--accent);
+    background: rgba(45,212,191,0.1);
+    transform: translateY(-50%) scale(1.1);
+}
+
+.card-maint-btn.is-maint {
+    border-color: rgba(251,191,36,0.6);
+    background: rgba(251,191,36,0.1);
+}
+
+/* ============================================================================
+   Wide Modal (Server Details)
+   ============================================================================ */
+.modal-wide {
+    max-width: 680px !important;
+}
+
+.modal-vendor-badge {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    font-family: var(--font-mono);
+}
+
+.modal-section {
+    margin-bottom: var(--space-lg);
+}
+
+.modal-section:last-child { margin-bottom: 0; }
+
+.modal-section-title {
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: var(--space-sm);
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--stroke);
+}
+
+/* Hardware grid */
+.hw-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-sm);
+}
+
+.hw-item {
+    background: var(--bg-elevated-2);
+    border-radius: var(--radius-sm);
+    padding: var(--space-sm);
+    border: 1px solid var(--stroke);
+}
+
+.hw-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.hw-value {
+    font-size: 0.92rem;
+    color: var(--text-primary);
+    font-weight: 500;
+    word-break: break-word;
+}
+
+.hw-value.mono {
+    font-family: var(--font-mono);
+    color: var(--accent);
+}
+
+.hw-empty {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-style: italic;
+    padding: var(--space-sm);
+}
+
+/* Maintenance active banner */
+.maint-active-banner {
+    background: rgba(251,191,36,0.08);
+    border: 1px solid rgba(251,191,36,0.3);
+    border-radius: var(--radius-sm);
+    padding: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.maint-reason {
+    margin-top: var(--space-xs);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.maint-meta {
+    margin-top: var(--space-xs);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: var(--space-sm);
+}
+
+/* zone-stat maintenance */
+.zone-stat-item.maint .zone-stat-value {
+    color: var(--color-maintenance);
+}
+
+/* ============================================================================
+   Color Available/Installed shorthands for zone stats
+   ============================================================================ */
+:root {
+    --color-available: var(--success);
+    --color-installed: var(--danger);
+}
+
+/* ============================================================================
+   Zone dropdown select
+   ============================================================================ */
+.zone-select-group {
+    max-width: 220px;
+    min-width: 160px;
+}
+
+.zone-select {
+    width: 100%;
+    background: var(--bg-elevated-2);
+    border: 1px solid var(--stroke);
+    border-radius: var(--radius-sm);
+    padding: 12px 36px 12px 14px;
+    font-size: 1rem;
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    cursor: pointer;
+    transition: all var(--ease-fast);
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237d8a9c' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+}
+
+.zone-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.15);
+    background-color: var(--bg-elevated);
+}
+
+.zone-select option {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
 @media (max-width: 520px) {
     .summary {
         grid-template-columns: 1fr;
@@ -1371,5 +1649,9 @@ h1 {
     .zone-header {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .zone-select-group {
+        max-width: 100%;
     }
 }

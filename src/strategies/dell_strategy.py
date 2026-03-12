@@ -1,13 +1,14 @@
 import logging
 import re
+import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
-from urllib3 import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 from .base_strategy import VendorStrategy
 from ..models import ServerProfile
+from ..models.server_document import ServerDocument
+from ..parsers import ZoneParser
 from ..infrastructure import VendorHTTPClient, OffsetLimitPaginator, PaginatedFetcher
 
-disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +43,6 @@ class DellStrategy(VendorStrategy):
         # Initialize HTTP client
         self._http_client = VendorHTTPClient(
             base_url=self.base_url,
-            verify_ssl=False,
             timeout=30
         )
 
@@ -136,6 +136,139 @@ class DellStrategy(VendorStrategy):
                 profiles.append(server_profile)
 
         return profiles
+
+    def get_full_server_data(
+        self,
+        pattern: str,
+        hardware_details: bool = True,
+        batch_size: int = 50,
+        batch_delay: float = 1.0,
+    ) -> List[ServerDocument]:
+        """
+        Fetch all matching servers for MongoDB sync.
+
+        Bulk calls (always, 0 per-server cost):
+          - /ProfileService/Profiles  → profile name + iDRAC IP
+          - /DeviceService/Devices    → model, serial (DeviceServiceTag)
+
+        Per-server calls (only when hardware_details=True, 4 calls/server):
+          - MAC, CPU, memory, storage inventory
+          Batched in groups of `batch_size` with `batch_delay` seconds between
+          batches to avoid rate limiting.
+
+        With hardware_details=False: 2 bulk calls total, any server count.
+        With hardware_details=True and 1000 servers:
+          ~4000 calls spread across ceil(1000/batch_size) batches.
+        """
+        self.ensure_connected()
+        regex = re.compile(pattern, re.IGNORECASE)
+        now = datetime.now(timezone.utc)
+
+        # ── 1. Bulk fetch profiles and devices ───────────────────────────
+        paginator = OffsetLimitPaginator(page_size=130, items_key="value")
+        fetcher = PaginatedFetcher(self._http_client, paginator)
+        all_profiles = fetcher.fetch_all("/ProfileService/Profiles")
+
+        dev_paginator = OffsetLimitPaginator(page_size=100, items_key="value")
+        dev_fetcher = PaginatedFetcher(self._http_client, dev_paginator)
+        all_devices = dev_fetcher.fetch_all("/DeviceService/Devices")
+        device_by_ip = {str(d.get("DeviceName", "")): d for d in all_devices}
+        logger.info(f"Dell: {len(all_profiles)} profiles, {len(all_devices)} devices (2 bulk calls)")
+
+        # Filter matching profiles
+        matching = [
+            p for p in all_profiles
+            if regex.match(p.get("ProfileName", ""))
+        ]
+        logger.info(
+            f"Dell: {len(matching)} servers match pattern "
+            f"({'with' if hardware_details else 'without'} per-server inventory)"
+        )
+
+        docs: List[ServerDocument] = []
+
+        for batch_start in range(0, len(matching), batch_size):
+            batch = matching[batch_start: batch_start + batch_size]
+
+            for profile in batch:
+                name = profile.get("ProfileName", "")
+                idrac_ip = profile.get("TargetName")
+                device = device_by_ip.get(str(idrac_ip), {}) if idrac_ip else {}
+                device_id = device.get("Id")
+
+                mac_address = None
+                cpu_model = cpu_count = cpu_cores = memory_gb = None
+                disks: list = []
+
+                if hardware_details and device_id:
+                    try:
+                        mac_address = self._get_device_mac(device_id)
+                    except Exception:
+                        pass
+
+                    try:
+                        resp = self._http_client.get(
+                            f"/DeviceService/Devices({device_id})/InventoryDetails('serverProcessors')"
+                        )
+                        processors = resp.json().get("InventoryInfo", [])
+                        if processors:
+                            p = processors[0]
+                            cpu_model = p.get("Family") or p.get("ProcessorName") or p.get("Model")
+                            cpu_count = len(processors)
+                            cpu_cores = p.get("NumberOfCores")
+                    except Exception:
+                        pass
+
+                    try:
+                        resp = self._http_client.get(
+                            f"/DeviceService/Devices({device_id})/InventoryDetails('serverMemoryDevices')"
+                        )
+                        mem_modules = resp.json().get("InventoryInfo", [])
+                        total_mb = sum(m.get("Size", 0) or 0 for m in mem_modules)
+                        memory_gb = round(total_mb / 1024, 1) if total_mb else None
+                    except Exception:
+                        pass
+
+                    try:
+                        resp = self._http_client.get(
+                            f"/DeviceService/Devices({device_id})/InventoryDetails('serverStorage')"
+                        )
+                        for drv in resp.json().get("InventoryInfo", []):
+                            size_mb = drv.get("Size") or 0
+                            disks.append({
+                                "size_gb": round(size_mb / 1024, 1) if size_mb else None,
+                                "type": drv.get("MediaType"),
+                                "model": drv.get("Model"),
+                            })
+                    except Exception:
+                        pass
+
+                docs.append(ServerDocument(**{
+                    "_id": name,
+                    "vendor": "DELL",
+                    "zone": ZoneParser.extract_zone(name),
+                    "bmc_address": idrac_ip,
+                    "mac_address": mac_address,
+                    "cpu_model": cpu_model,
+                    "cpu_count": cpu_count,
+                    "cpu_cores": cpu_cores,
+                    "memory_gb": memory_gb,
+                    "model": device.get("Model"),
+                    "serial": device.get("DeviceServiceTag"),
+                    "disks": disks,
+                    "last_scanned": now,
+                }))
+
+            # Rate-limit protection: sleep between batches
+            if hardware_details and batch_start + batch_size < len(matching):
+                logger.debug(
+                    f"Dell: batch {batch_start // batch_size + 1} done, "
+                    f"sleeping {batch_delay}s before next batch"
+                )
+                time.sleep(batch_delay)
+
+        logger.info(f"Dell: collected data for {len(docs)} servers")
+        return docs
 
     def _build_device_cache(self) -> Dict[str, Dict]:
         """Build cache of devices by iDRAC IP for quick lookup"""

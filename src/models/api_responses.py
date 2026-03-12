@@ -5,7 +5,7 @@ Provides type-safe Pydantic models for all API responses with validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 
 
 class MaintenanceInfo(BaseModel):
@@ -17,14 +17,25 @@ class MaintenanceInfo(BaseModel):
 
 
 class ServerInfo(BaseModel):
-    """Server information with installation status"""
-    name: str = Field(..., min_length=1, description="Server profile name")
-    vendor: str = Field(..., description="Vendor name (HP, DELL, CISCO)")
-    zone: Optional[str] = Field(None, description="Zone/location name")
-    status: Literal["available", "installed", "maintenance"] = Field(..., description="Server status")
-    cluster: Optional[str] = Field(None, description="Management cluster the agent is on")
-    deployment_cluster: Optional[str] = Field(None, description="Cluster the agent is deployed to")
-    maintenance: Optional[MaintenanceInfo] = Field(None, description="Maintenance details if in maintenance mode")
+    """Server information with status, hardware details, and maintenance."""
+    name: str = Field(..., min_length=1)
+    vendor: str
+    zone: Optional[str] = None
+    status: Literal["available", "installed", "maintenance"]
+    cluster: Optional[str] = None
+    deployment_cluster: Optional[str] = None
+    maintenance: Optional[MaintenanceInfo] = None
+
+    # Hardware details (from MongoDB, populated by CronJob)
+    bmc_address: Optional[str] = None
+    mac_address: Optional[str] = None
+    cpu_model: Optional[str] = None
+    cpu_count: Optional[int] = None
+    cpu_cores: Optional[int] = None
+    memory_gb: Optional[float] = None
+    model: Optional[str] = None
+    serial: Optional[str] = None
+    disks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ZoneData(BaseModel):

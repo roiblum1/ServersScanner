@@ -1,13 +1,13 @@
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
-from urllib3 import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 from .base_strategy import VendorStrategy
 from ..models import ServerProfile
+from ..models.server_document import ServerDocument
+from ..parsers import ZoneParser
 from ..infrastructure import VendorHTTPClient, CursorPaginator, PaginatedFetcher
 
-disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +41,6 @@ class HPStrategy(VendorStrategy):
         # Initialize HTTP client
         self._http_client = VendorHTTPClient(
             base_url=self.base_url,
-            verify_ssl=False,
             timeout=30
         )
 
@@ -142,6 +141,86 @@ class HPStrategy(VendorStrategy):
                 profiles.append(server_profile)
 
         return profiles
+
+    def get_full_server_data(
+        self,
+        pattern: str,
+        hardware_details: bool = True,
+        batch_size: int = 50,
+        batch_delay: float = 1.0,
+    ) -> List[ServerDocument]:
+        """
+        Fetch all matching servers with full hardware details for MongoDB sync.
+
+        Uses TWO bulk API calls regardless of server count:
+          1. /rest/server-profiles?count=-1   → all profiles
+          2. /rest/server-hardware?count=-1   → all hardware (BMC, MAC, CPU, RAM, disks)
+
+        Then cross-references by serverHardwareUri — zero per-server calls.
+        batch_size / batch_delay params are accepted for API compatibility but unused here.
+        """
+        self.ensure_connected()
+        regex = re.compile(pattern, re.IGNORECASE)
+        now = datetime.now(timezone.utc)
+
+        # ── 1. Fetch all server profiles (bulk, paginated) ──────────────────
+        paginator = CursorPaginator(items_key="members", next_uri_key="nextPageUri")
+        fetcher = PaginatedFetcher(self._http_client, paginator)
+        all_profiles = fetcher.fetch_all("/rest/server-profiles?count=-1")
+        logger.info(f"HP: fetched {len(all_profiles)} server profiles")
+
+        # ── 2. Fetch ALL server hardware in one bulk call ─────────────────
+        hw_by_uri: dict = {}
+        if hardware_details:
+            try:
+                all_hw = fetcher.fetch_all("/rest/server-hardware?count=-1")
+                hw_by_uri = {hw["uri"]: hw for hw in all_hw if hw.get("uri")}
+                logger.info(f"HP: fetched {len(hw_by_uri)} hardware records in bulk (0 per-server calls)")
+            except Exception as e:
+                logger.warning(f"HP: bulk hardware fetch failed, continuing without hardware details: {e}")
+
+        # ── 3. Cross-reference profiles → hardware ────────────────────────
+        docs: List[ServerDocument] = []
+        for profile in all_profiles:
+            name = profile.get("name", "")
+            if not regex.match(name):
+                continue
+
+            hw_uri = profile.get("serverHardwareUri", "")
+            hardware = hw_by_uri.get(hw_uri, {})
+            proc = hardware.get("processorSummary", {})
+            mem = hardware.get("memorySummary", {})
+
+            docs.append(ServerDocument(**{
+                "_id": name,
+                "vendor": "HP",
+                "zone": ZoneParser.extract_zone(name),
+                "bmc_address": self._extract_ilo_ip(hardware),
+                "mac_address": self._extract_mac(hardware),
+                "cpu_model": proc.get("model"),
+                "cpu_count": proc.get("count"),
+                "cpu_cores": proc.get("coreCount"),
+                "memory_gb": mem.get("totalSystemMemoryGiB"),
+                "model": hardware.get("model"),
+                "serial": hardware.get("serialNumber") or profile.get("serialNumber"),
+                "disks": self._extract_disks(hardware),
+                "last_scanned": now,
+            }))
+
+        logger.info(f"HP: collected full data for {len(docs)} servers (2 bulk API calls total)")
+        return docs
+
+    def _extract_disks(self, hardware: dict) -> list:
+        """Extract local disk info from HP hardware response"""
+        disks = []
+        storage = hardware.get("localStorage", {})
+        for drive in storage.get("drives", []):
+            disks.append({
+                "size_gb": drive.get("capacityInGB"),
+                "type": drive.get("driveMedia"),
+                "model": drive.get("model"),
+            })
+        return disks
 
     def _extract_ilo_ip(self, hardware: dict) -> Optional[str]:
         """Extract iLO IP from hardware data"""

@@ -1,25 +1,25 @@
 """
-Dashboard service for business logic orchestration.
+Dashboard service — assembles dashboard data from MongoDB + live K8s queries.
 
-Coordinates scanning, data assembly, and maintenance status refreshing
-for the dashboard.
+Read path:
+  1. Fetch all server documents from MongoDB (fast)
+  2. Query Kubernetes live for current installation status (frequently changing)
+  3. Merge: maintenance from MongoDB doc, status from K8s lookup
 """
 
-from typing import Optional, Dict, List
-import asyncio
 import logging
-import os
+from collections import defaultdict
+from typing import Dict, List, Optional
+
 from ..models.api_responses import (
-    DashboardData,
-    ZoneData,
+    CacheInfo,
     ClusterStats,
+    DashboardData,
     ServerInfo,
-    MaintenanceInfo,
-    CacheInfo
+    ZoneData,
 )
-from ..services.scanner_service import initialize_scanner
-from ..repositories.maintenance_repository import MaintenanceRepository
 from ..repositories.kubernetes_repository import KubernetesRepository
+from ..storage.database.server_repository import ServerRepository
 
 logger = logging.getLogger(__name__)
 
@@ -28,179 +28,148 @@ class DashboardService:
     """
     Business logic for dashboard data assembly.
 
-    Orchestrates vendor scanning, Kubernetes queries, and maintenance
-    status to build complete dashboard data.
+    Reads server profiles from MongoDB and overlays live Kubernetes
+    installation status on every request.
     """
 
     def __init__(
         self,
-        maintenance_repo: MaintenanceRepository,
+        server_repo: ServerRepository,
         k8s_repo: KubernetesRepository,
-        cache_ttl: int
+        cache_ttl: int,
     ):
-        """
-        Initialize dashboard service.
-
-        Args:
-            maintenance_repo: Repository for maintenance data
-            k8s_repo: Repository for Kubernetes agent data
-            cache_ttl: Cache TTL in seconds
-        """
-        self.maintenance_repo = maintenance_repo
+        self.server_repo = server_repo
         self.k8s_repo = k8s_repo
         self.cache_ttl = cache_ttl
 
     async def build_dashboard(
         self,
-        zone_filter: Optional[str] = None
+        zone_filter: Optional[str] = None,
     ) -> DashboardData:
         """
         Build complete dashboard data.
 
-        Orchestrates:
-        1. Vendor scanning
-        2. Kubernetes agent queries
-        3. Maintenance status loading
-        4. Data assembly
-
-        Args:
-            zone_filter: Optional comma-separated list of zones to filter
-
-        Returns:
-            DashboardData ready for frontend
+        1. Load all server documents from MongoDB
+        2. Query Kubernetes live
+        3. Assemble and return DashboardData
         """
-        # Override zone filter if provided
+        logger.info("Loading server data from MongoDB...")
+        docs = await self.server_repo.get_all_servers()
+
         if zone_filter:
-            os.environ["ZONES"] = zone_filter
+            allowed = {z.strip().lower() for z in zone_filter.split(",") if z.strip()}
+            docs = [d for d in docs if not d.zone or d.zone.lower() in allowed]
 
-        # Initialize scanner
-        logger.info("Initializing scanner...")
-        scanner = initialize_scanner()
+        if self.k8s_repo is not None:
+            logger.info(f"Querying Kubernetes for installed servers ({len(docs)} MongoDB docs)...")
+            installed_by_cluster = await self.k8s_repo.get_installed_servers_by_cluster()
+            agent_details = await self.k8s_repo.get_agent_details()
+        else:
+            logger.info("Kubernetes not configured — skipping K8s live queries")
+            installed_by_cluster = {}
+            agent_details = {}
 
-        # Get all servers (without filtering installed ones)
-        logger.info("Scanning vendors for all servers...")
-        all_results = scanner.scan(filter_installed=False)
+        return self._assemble_dashboard(docs, installed_by_cluster, agent_details)
 
-        # Get installed servers per cluster
-        logger.info("Querying Kubernetes for installed servers...")
-        installed_by_cluster = await self.k8s_repo.get_installed_servers_by_cluster()
-        agent_details = await self.k8s_repo.get_agent_details()
-
-        # Load maintenance records
-        logger.info("Loading maintenance records...")
-        maintenance_records = await self.maintenance_repo.get_all()
-
-        # Assemble dashboard
-        dashboard_data = await self._assemble_dashboard(
-            all_results,
-            installed_by_cluster,
-            agent_details,
-            maintenance_records
-        )
-
-        logger.info(f"Dashboard built: {len(dashboard_data.zones)} zones, {dashboard_data.summary['total_installed']} installed")
-        return dashboard_data
-
-    async def _assemble_dashboard(
+    def _assemble_dashboard(
         self,
-        all_results,
+        docs,
         installed_by_cluster: Dict[str, List[str]],
         agent_details: Dict,
-        maintenance_records: Dict[str, MaintenanceInfo]
     ) -> DashboardData:
-        """
-        Assemble dashboard data from components.
-
-        Args:
-            all_results: ScanResults with all servers
-            installed_by_cluster: Dict mapping cluster to installed server names
-            agent_details: Dict mapping server name to AgentInfo
-            maintenance_records: Dict mapping server name to MaintenanceInfo
-
-        Returns:
-            Complete DashboardData
-        """
-        # Flatten installed servers to set for quick lookup
-        all_installed = set()
+        """Merge MongoDB documents with live K8s data into DashboardData."""
+        all_installed: set = set()
         for servers in installed_by_cluster.values():
             all_installed.update(servers)
 
-        # Build zone data
+        # Group docs by zone → vendor
+        zone_vendor: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
+        for doc in docs:
+            zone = doc.zone or "Unknown"
+            zone_vendor[zone][doc.vendor].append(doc)
+
         zones_data = []
-        for zone in all_results.get_zones():
+        for zone in sorted(zone_vendor.keys()):
             vendors_data = {}
-
-            for vendor in all_results.get_vendors_in_zone(zone):
-                profiles = all_results.get_profiles(zone, vendor)
+            for vendor in sorted(zone_vendor[zone].keys()):
                 servers_info = []
+                for doc in sorted(zone_vendor[zone][vendor], key=lambda d: d.id):
+                    normalized = doc.id.lower().strip()
 
-                for profile in sorted(profiles, key=lambda p: p.name):
-                    # Determine status and cluster
-                    status = "available"
-                    cluster = None
-                    deployment_cluster = None
-                    maintenance_info = None
-
-                    # Normalize for case-insensitive comparison
-                    normalized_name = profile.name.lower().strip()
-
-                    # Check maintenance FIRST (highest priority)
-                    if normalized_name in maintenance_records:
+                    if doc.maintenance is not None:
                         status = "maintenance"
-                        maintenance_info = maintenance_records[normalized_name]
-                    elif normalized_name in all_installed:
+                        cluster = None
+                        deployment_cluster = None
+                    elif normalized in all_installed:
                         status = "installed"
-                        # Find which management cluster
-                        for cluster_name, servers in installed_by_cluster.items():
-                            if normalized_name in servers:
-                                cluster = cluster_name
-                                break
-
-                        # Get deployment cluster from agent details
-                        if normalized_name in agent_details:
-                            agent_info = agent_details[normalized_name]
-                            deployment_cluster = agent_info.deployment_cluster
+                        cluster = next(
+                            (c for c, srvs in installed_by_cluster.items() if normalized in srvs),
+                            None,
+                        )
+                        agent = agent_details.get(normalized)
+                        deployment_cluster = agent.deployment_cluster if agent else None
+                    else:
+                        status = "available"
+                        cluster = None
+                        deployment_cluster = None
 
                     servers_info.append(ServerInfo(
-                        name=profile.name,
+                        name=doc.id,
                         vendor=vendor,
-                        zone=zone,
+                        zone=zone if zone != "Unknown Zone" else "Unknown",
                         status=status,
                         cluster=cluster,
                         deployment_cluster=deployment_cluster,
-                        maintenance=maintenance_info
+                        maintenance=doc.maintenance,
+                        # Hardware fields from MongoDB
+                        bmc_address=doc.bmc_address,
+                        mac_address=doc.mac_address,
+                        cpu_model=doc.cpu_model,
+                        cpu_count=doc.cpu_count,
+                        cpu_cores=doc.cpu_cores,
+                        memory_gb=doc.memory_gb,
+                        model=doc.model,
+                        serial=doc.serial,
+                        disks=doc.disks,
                     ))
 
                 vendors_data[vendor] = servers_info
 
             zones_data.append(ZoneData(
                 zone=zone if zone != "Unknown Zone" else "Unknown",
-                vendors=vendors_data
+                vendors=vendors_data,
             ))
 
-        # Build cluster stats
-        cluster_stats = []
-        for cluster_name, servers in installed_by_cluster.items():
-            cluster_stats.append(ClusterStats(
-                cluster_name=cluster_name,
-                installed_count=len(servers),
-                servers=sorted(servers)
-            ))
+        # Cluster stats
+        cluster_stats = [
+            ClusterStats(
+                cluster_name=cn,
+                installed_count=len(srvs),
+                servers=sorted(srvs),
+            )
+            for cn, srvs in installed_by_cluster.items()
+        ]
 
-        # Build summary
-        total_servers = sum(len(servers) for servers in installed_by_cluster.values())
         available_count = sum(
-            len([s for s in vendor_servers if s.status == "available"])
-            for zone in zones_data
-            for vendor_servers in zone.vendors.values()
+            1
+            for z in zones_data
+            for vendor_servers in z.vendors.values()
+            for s in vendor_servers
+            if s.status == "available"
         )
 
         summary = {
             "total_available": available_count,
-            "total_installed": total_servers,
+            "total_installed": sum(len(s) for s in installed_by_cluster.values()),
             "total_clusters": len(installed_by_cluster),
-            "total_zones": len(zones_data)
+            "total_zones": len(zones_data),
         }
+
+        logger.info(
+            f"Dashboard assembled: {len(zones_data)} zones, "
+            f"{summary['total_installed']} installed, "
+            f"{summary['total_available']} available"
+        )
 
         return DashboardData(
             zones=zones_data,
@@ -209,41 +178,6 @@ class DashboardService:
             cache_info=CacheInfo(
                 cached=False,
                 age_seconds=0,
-                next_refresh_seconds=self.cache_ttl
-            )
+                next_refresh_seconds=self.cache_ttl,
+            ),
         )
-
-    async def refresh_maintenance(self, dashboard_data: DashboardData) -> DashboardData:
-        """
-        Refresh maintenance status in cached dashboard data.
-
-        Hybrid caching: vendor data cached (expensive), maintenance fresh (cheap).
-
-        Args:
-            dashboard_data: Existing dashboard data from cache
-
-        Returns:
-            DashboardData with refreshed maintenance status
-        """
-        logger.info("Refreshing maintenance status in cached data...")
-
-        # Load current maintenance records
-        maintenance_records = await self.maintenance_repo.get_all()
-
-        # Update maintenance status for all servers
-        for zone in dashboard_data.zones:
-            for vendor, servers in zone.vendors.items():
-                for server in servers:
-                    normalized = server.name.lower().strip()
-
-                    if normalized in maintenance_records:
-                        # Server is now in maintenance
-                        server.status = "maintenance"
-                        server.maintenance = maintenance_records[normalized]
-                    elif server.maintenance is not None:
-                        # Server was in maintenance but no longer
-                        server.status = "installed" if server.cluster else "available"
-                        server.maintenance = None
-
-        logger.info("Maintenance status refreshed")
-        return dashboard_data

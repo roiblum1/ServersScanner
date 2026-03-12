@@ -8,12 +8,10 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Optional, List, Dict, Tuple
 import requests
-from urllib3 import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 
 from ..models import ServerProfile
+from ..models.server_document import ServerDocument
 
-disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +99,30 @@ class VendorStrategy(ABC):
 
         Returns:
             List of ServerProfile objects (with only name and vendor populated)
+        """
+        pass
+
+    @abstractmethod
+    def get_full_server_data(
+        self,
+        pattern: str,
+        hardware_details: bool = True,
+        batch_size: int = 50,
+        batch_delay: float = 1.0,
+    ) -> List[ServerDocument]:
+        """
+        Fetch all servers matching pattern for MongoDB sync.
+
+        Args:
+            pattern: Regex pattern to match server names
+            hardware_details: When False, only sync model/serial/BMC from bulk
+                endpoints — zero per-server API calls, safe for any scale.
+                When True, also fetches MAC, CPU, memory, storage per server.
+            batch_size: Process this many servers before sleeping (rate limit)
+            batch_delay: Seconds to sleep between batches
+
+        Returns:
+            List of ServerDocument objects ready for MongoDB upsert
         """
         pass
 

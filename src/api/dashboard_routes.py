@@ -47,18 +47,11 @@ async def get_servers(
         if not force_refresh:
             cached_entry = await cache_repo.get(cache_key)
             if cached_entry:
-                # HYBRID APPROACH: Use cached vendor scan data (expensive)
-                # but refresh maintenance data (cheap PVC read)
                 data = cached_entry.data
-                logger.info(f"Using cached vendor data, refreshing maintenance status...")
-
-                # Refresh maintenance status for all servers
-                data = await dashboard_service.refresh_maintenance(data)
-
                 data.cache_info.cached = True
                 data.cache_info.age_seconds = cached_entry.age_seconds()
                 data.cache_info.next_refresh_seconds = cache_repo.ttl_seconds - cached_entry.age_seconds()
-
+                logger.info(f"Returning cached dashboard (age: {data.cache_info.age_seconds}s)")
                 return data
 
         # Cache miss or force refresh - perform scan

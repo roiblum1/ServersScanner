@@ -1,12 +1,13 @@
 import logging
 import re
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
-from urllib3 import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 from .base_strategy import VendorStrategy
 from ..models import ServerProfile
+from ..models.server_document import ServerDocument
+from ..parsers import ZoneParser
 
-disable_warnings(InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
@@ -43,14 +44,17 @@ class CiscoStrategy(VendorStrategy):
         try:
             from ucscsdk.ucschandle import UcscHandle
             from ucsmsdk.ucshandle import UcsHandle
+            from ..config import AppConfig
 
             self._ucsc_handle = UcscHandle(
                 central_ip,
                 self.credentials['central_username'],
-                self.credentials['central_password']
+                self.credentials['central_password'],
+                secure=AppConfig.TLS_VERIFY,
             )
             self._ucsc_handle.login()
             self._UcsHandle = UcsHandle
+            self._tls_verify = AppConfig.TLS_VERIFY
             logger.info("Successfully connected to Cisco UCS Central")
 
         except ImportError:
@@ -89,7 +93,8 @@ class CiscoStrategy(VendorStrategy):
                     ucsm_handle = self._UcsHandle(
                         domain,
                         self.credentials['manager_username'],
-                        self.credentials['manager_password']
+                        self.credentials['manager_password'],
+                        secure=getattr(self, '_tls_verify', False),
                     )
 
                     logger.debug(f"Attempting login to UCS Manager at {domain}...")
@@ -152,6 +157,131 @@ class CiscoStrategy(VendorStrategy):
                 profiles.append(server_profile)
 
         return profiles
+
+    def get_full_server_data(
+        self,
+        pattern: str,
+        hardware_details: bool = True,
+        batch_size: int = 50,
+        batch_delay: float = 1.0,
+    ) -> List[ServerDocument]:
+        """
+        Fetch all matching servers with full hardware details for MongoDB sync.
+        Groups servers by UCS Manager domain to minimise connection overhead.
+        """
+        self.ensure_connected()
+        regex = re.compile(pattern, re.IGNORECASE)
+
+        all_servers = self._ucsc_handle.query_classid("lsServer")
+
+        # Group by domain
+        by_domain: Dict[str, List] = defaultdict(list)
+        for srv in all_servers:
+            if regex.match(srv.name):
+                by_domain[srv.domain or ""].append(srv)
+
+        docs: List[ServerDocument] = []
+        now = datetime.now(timezone.utc)
+
+        # Servers with no domain — record name only
+        for srv in by_domain.pop("", []):
+            docs.append(ServerDocument(**{
+                "_id": srv.name,
+                "vendor": "CISCO",
+                "zone": ZoneParser.extract_zone(srv.name),
+                "last_scanned": now,
+            }))
+
+        # Servers per domain
+        for domain, domain_servers in by_domain.items():
+            ucsm_handle = None
+            try:
+                ucsm_handle = self._UcsHandle(
+                    domain,
+                    self.credentials["manager_username"],
+                    self.credentials["manager_password"],
+                )
+                ucsm_handle.login()
+                logger.info(f"Cisco: connected to UCS Manager at {domain}")
+
+                for srv in domain_servers:
+                    kvm_ip = mac_address = None
+                    cpu_model = cpu_count = cpu_cores = memory_gb = model = serial = None
+                    disks: list = []
+
+                    try:
+                        details = self._ucsc_handle.query_dn(srv.dn)
+                        if details:
+                            kvm_ip = self._extract_ucs_management_ip(ucsm_handle, details)
+                            mac_address = self._extract_ucs_mac_address(ucsm_handle, details)
+
+                        # Physical node hardware via pnDn
+                        pn_dn = getattr(srv, "pn_dn", None) or getattr(srv, "pnDn", None)
+                        if pn_dn:
+                            compute_node = ucsm_handle.query_dn(pn_dn)
+                            if compute_node:
+                                raw_cpus = getattr(compute_node, "num_of_cpus", None)
+                                cpu_count = int(raw_cpus) if raw_cpus else None
+                                raw_mem = getattr(compute_node, "total_memory", None)
+                                memory_gb = round(int(raw_mem) / 1024, 1) if raw_mem else None
+                                model = getattr(compute_node, "model", None)
+                                serial = getattr(compute_node, "serial", None)
+
+                                try:
+                                    procs = ucsm_handle.query_children(
+                                        in_mo=compute_node, class_id="ProcessorUnit"
+                                    )
+                                    if procs:
+                                        cpu_model = getattr(procs[0], "model", None)
+                                        raw_cores = getattr(procs[0], "cores", None)
+                                        cpu_cores = int(raw_cores) if raw_cores else None
+                                except Exception:
+                                    pass
+
+                                try:
+                                    storage_disks = ucsm_handle.query_children(
+                                        in_mo=compute_node, class_id="StorageLocalDisk"
+                                    )
+                                    for disk in storage_disks:
+                                        raw_size = getattr(disk, "size", None)
+                                        size_mb = int(raw_size) if raw_size else 0
+                                        disks.append({
+                                            "size_gb": round(size_mb / 1024, 1) if size_mb else None,
+                                            "type": getattr(disk, "disk_type", None),
+                                            "model": getattr(disk, "model", None),
+                                        })
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.warning(f"Cisco: could not get details for '{srv.name}': {e}")
+
+                    docs.append(ServerDocument(**{
+                        "_id": srv.name,
+                        "vendor": "CISCO",
+                        "zone": ZoneParser.extract_zone(srv.name),
+                        "bmc_address": kvm_ip,
+                        "mac_address": mac_address,
+                        "cpu_model": cpu_model,
+                        "cpu_count": cpu_count,
+                        "cpu_cores": cpu_cores,
+                        "memory_gb": memory_gb,
+                        "model": model,
+                        "serial": serial,
+                        "disks": disks,
+                        "last_scanned": now,
+                    }))
+
+            except Exception as e:
+                logger.error(f"Cisco: error connecting to UCS Manager at {domain}: {e}")
+            finally:
+                if ucsm_handle:
+                    try:
+                        ucsm_handle.logout()
+                    except Exception:
+                        pass
+
+        logger.info(f"Cisco: collected full data for {len(docs)} servers")
+        return docs
 
     def _get_domain_server_details(self, domain: str, servers: List) -> Dict[str, Dict]:
         """

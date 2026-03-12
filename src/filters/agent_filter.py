@@ -154,9 +154,10 @@ class AgentFilter:
 
         try:
             # Create cluster-specific configuration
+            from ..config import AppConfig
             configuration = client.Configuration()
             configuration.host = api_server
-            configuration.verify_ssl = False
+            configuration.verify_ssl = AppConfig.TLS_VERIFY
 
             # Get token for this cluster
             cluster_token = self.config.get_token_for_cluster(cluster_index)

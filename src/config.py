@@ -76,8 +76,18 @@ class AppConfig:
     STATIC_DIR = "static"
     HTML_DIR = "static/html"
 
-    # Data Storage
-    DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+    # MongoDB
+    MONGO_URI = os.getenv("MONGO_URI", "")
+    MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "server_scanner")
+
+    # TLS/SSL verification — applies to HP OneView, Dell OME, Kubernetes, MongoDB, Cisco UCS
+    # Set to false when using self-signed or internal certificates (typical in lab/prod infra)
+    TLS_VERIFY = os.getenv("TLS_VERIFY", "false").lower() == "true"
+
+    # CronJob Sync — rate-limit protection
+    # After every SYNC_BATCH_SIZE servers, sleep SYNC_BATCH_DELAY seconds
+    SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "50"))
+    SYNC_BATCH_DELAY = float(os.getenv("SYNC_BATCH_DELAY", "1.0"))
 
     # Default Values
     DEFAULT_ZONE_PATTERN = r"^ocp4-hypershift-.*"
@@ -327,6 +337,76 @@ def validate_config():
     logger.info(f"Configuration validated: {vendors_configured} vendor(s) configured")
 
 
+def validate_web_config():
+    """
+    Validate web app configuration (MongoDB required, vendors not required).
+    Called by the dashboard web process.
+    """
+    errors = []
+
+    if not AppConfig.MONGO_URI:
+        errors.append("MONGO_URI is required for the web dashboard")
+
+    if not KubernetesConfig.is_configured():
+        logger.warning("Kubernetes not configured - installed server filtering disabled")
+    else:
+        clusters = KubernetesConfig.get_cluster_list()
+        tokens = KubernetesConfig.get_token_list()
+        if len(tokens) != len(clusters):
+            errors.append(f"Token count ({len(tokens)}) doesn't match cluster count ({len(clusters)})")
+
+    if errors:
+        raise ValueError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+    logger.info(f"Web config validated: MongoDB='{AppConfig.MONGO_DB_NAME}'")
+
+
+def validate_sync_config():
+    """
+    Validate CronJob sync configuration (MongoDB + at least one vendor required).
+    Called by the sync_mongo CLI entry point.
+    """
+    errors = []
+
+    if not AppConfig.MONGO_URI:
+        errors.append("MONGO_URI is required for the sync job")
+
+    vendors_configured = 0
+    if VendorConfig.ONEVIEW_IP:
+        if not all([VendorConfig.ONEVIEW_USERNAME, VendorConfig.ONEVIEW_PASSWORD]):
+            errors.append("HP OneView IP configured but missing username/password")
+        else:
+            vendors_configured += 1
+
+    if VendorConfig.OME_IP:
+        if not all([VendorConfig.OME_USERNAME, VendorConfig.OME_PASSWORD]):
+            errors.append("Dell OME IP configured but missing username/password")
+        else:
+            vendors_configured += 1
+
+    if VendorConfig.UCS_CENTRAL_IP:
+        if not all([VendorConfig.UCS_CENTRAL_USERNAME, VendorConfig.UCS_CENTRAL_PASSWORD]):
+            errors.append("Cisco UCS IP configured but missing username/password")
+        else:
+            vendors_configured += 1
+
+    if vendors_configured == 0:
+        errors.append("No vendor credentials configured (need at least one: HP, Dell, or Cisco)")
+
+    if errors:
+        raise ValueError("Sync config validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+    logger.info(f"Sync config validated: {vendors_configured} vendor(s), MongoDB='{AppConfig.MONGO_DB_NAME}'")
+
+
+# ============================================================================
+# TLS warning suppression — suppress urllib3 InsecureRequestWarning globally
+# when TLS_VERIFY=false (self-signed certs in internal networks).
+# ============================================================================
+if not AppConfig.TLS_VERIFY:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # ============================================================================
 # Export commonly used configs
 # ============================================================================
@@ -342,4 +422,6 @@ __all__ = [
     'load_environment',
     'setup_logging',
     'validate_config',
+    'validate_web_config',
+    'validate_sync_config',
 ]
