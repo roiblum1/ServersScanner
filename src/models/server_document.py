@@ -8,7 +8,7 @@ This is the shared contract between the CronJob write path
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .api_responses import MaintenanceInfo
 
@@ -23,6 +23,11 @@ class ServerDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(..., alias="_id", description="Server profile name (MongoDB _id)")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def normalize_id(cls, v: str) -> str:
+        return v.lower().strip()
     vendor: str
     zone: Optional[str] = None
     bmc_address: Optional[str] = None
@@ -39,6 +44,9 @@ class ServerDocument(BaseModel):
 
     # Maintenance (written by API, preserved by CronJob upserts)
     maintenance: Optional[MaintenanceInfo] = None
+
+    # Conflict detection (set by CronJob when >1 vendor returns the same server name)
+    conflict_vendors: Optional[list[str]] = None
 
     # Audit
     last_scanned: Optional[datetime] = None

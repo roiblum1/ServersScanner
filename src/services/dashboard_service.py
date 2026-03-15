@@ -127,8 +127,10 @@ class DashboardService:
                         cluster = None
                         deployment_cluster = None
 
-                    # Status: maintenance takes priority over installed/available
-                    if doc.maintenance is not None:
+                    # Status priority: error > maintenance > installed > available
+                    if doc.conflict_vendors:
+                        status = "error"
+                    elif doc.maintenance is not None:
                         status = "maintenance"
                     elif cluster is not None:
                         status = "installed"
@@ -143,6 +145,7 @@ class DashboardService:
                         cluster=cluster,
                         deployment_cluster=deployment_cluster,
                         maintenance=doc.maintenance,
+                        conflict_vendors=doc.conflict_vendors,
                         # Hardware fields from MongoDB
                         bmc_address=doc.bmc_address,
                         mac_address=doc.mac_address,

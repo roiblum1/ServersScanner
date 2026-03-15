@@ -58,6 +58,8 @@ class SyncService:
         2. Upsert each document into MongoDB (preserving maintenance field)
         """
         result = SyncResult()
+        # Track server_name → vendor for duplicate detection across vendors
+        seen: dict[str, str] = {}
 
         logger.info(
             f"Starting sync: pattern='{self.pattern}', "
@@ -83,6 +85,16 @@ class SyncService:
                         try:
                             await self.server_repo.upsert_server(doc)
                             result.n_upserted += 1
+                            # Duplicate detection: same name from a different vendor
+                            if doc.id in seen:
+                                conflicting_vendors = [seen[doc.id], vendor]
+                                logger.warning(
+                                    f"[{vendor}] '{doc.id}' also returned by "
+                                    f"'{seen[doc.id]}' — flagging as conflict"
+                                )
+                                await self.server_repo.set_conflict(doc.id, conflicting_vendors)
+                            else:
+                                seen[doc.id] = vendor
                             break
                         except Exception as e:
                             if attempt < UPSERT_MAX_RETRIES:

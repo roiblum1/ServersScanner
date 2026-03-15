@@ -21,10 +21,11 @@ class ServerInfo(BaseModel):
     name: str = Field(..., min_length=1)
     vendor: str
     zone: Optional[str] = None
-    status: Literal["available", "installed", "maintenance"]
+    status: Literal["available", "installed", "maintenance", "error"]
     cluster: Optional[str] = None
     deployment_cluster: Optional[str] = None
     maintenance: Optional[MaintenanceInfo] = None
+    conflict_vendors: Optional[list[str]] = None
 
     # Hardware details (from MongoDB, populated by CronJob)
     bmc_address: Optional[str] = None

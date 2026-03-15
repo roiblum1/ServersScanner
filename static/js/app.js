@@ -337,18 +337,20 @@ function createZoneHeader(zone, stats) {
             <span style="color:var(--success)"><strong>${stats.available}</strong> available</span>
             <span style="color:var(--danger)"><strong>${stats.installed}</strong> installed</span>
             ${stats.maintenance ? `<span style="color:var(--color-maintenance)"><strong>${stats.maintenance}</strong> maintenance</span>` : ''}
+            ${stats.error ? `<span style="color:var(--color-error)"><strong>${stats.error}</strong> error</span>` : ''}
         </div>`;
     return h;
 }
 
 function calcZoneStats(zone) {
-    let available = 0, installed = 0, maintenance = 0;
+    let available = 0, installed = 0, maintenance = 0, error = 0;
     Object.values(zone.vendors).flat().forEach(s => {
         if (s.status === 'available') available++;
         else if (s.status === 'installed') installed++;
         else if (s.status === 'maintenance') maintenance++;
+        else if (s.status === 'error') error++;
     });
-    return { available, installed, maintenance };
+    return { available, installed, maintenance, error };
 }
 
 function createVendorSection(vendor, servers) {
@@ -419,6 +421,15 @@ function createServerCard(server) {
         info.appendChild(maintBanner);
     }
 
+    // Conflict banner — shown when >1 vendor returns the same server name
+    if (server.conflict_vendors && server.conflict_vendors.length) {
+        const conflictBanner = document.createElement('div');
+        conflictBanner.className = 'card-conflict-banner';
+        conflictBanner.title = 'Same server name returned by multiple vendors — rename one server to resolve';
+        conflictBanner.textContent = `⚠ Duplicate: ${server.conflict_vendors.join(' & ')}`;
+        info.appendChild(conflictBanner);
+    }
+
     card.appendChild(dot);
     card.appendChild(info);
 
@@ -479,6 +490,7 @@ function createZoneDashboardCard(zone) {
             <div class="zone-stat-item available"><div class="zone-stat-label">Available</div><div class="zone-stat-value">${stats.available}</div></div>
             <div class="zone-stat-item installed"><div class="zone-stat-label">Installed</div><div class="zone-stat-value">${stats.installed}</div></div>
             ${stats.maintenance ? `<div class="zone-stat-item maint"><div class="zone-stat-label">Maintenance</div><div class="zone-stat-value">${stats.maintenance}</div></div>` : ''}
+            ${stats.error ? `<div class="zone-stat-item error"><div class="zone-stat-label">Error</div><div class="zone-stat-value">${stats.error}</div></div>` : ''}
         </div>`;
 
     const vendors = {};
@@ -649,6 +661,17 @@ function updateCardInPlace(server) {
         banner.className = 'card-maint-banner';
         banner.innerHTML = `<span class="severity-badge ${server.maintenance.severity}">${server.maintenance.severity.toUpperCase()}</span> ${server.maintenance.reason}`;
         info.appendChild(banner);
+    }
+
+    // Update or remove conflict banner
+    const existingConflict = info.querySelector('.card-conflict-banner');
+    if (existingConflict) existingConflict.remove();
+    if (server.conflict_vendors && server.conflict_vendors.length) {
+        const conflictBanner = document.createElement('div');
+        conflictBanner.className = 'card-conflict-banner';
+        conflictBanner.title = 'Same server name returned by multiple vendors — rename one server to resolve';
+        conflictBanner.textContent = `⚠ Duplicate: ${server.conflict_vendors.join(' & ')}`;
+        info.appendChild(conflictBanner);
     }
 
     // Update maintenance button

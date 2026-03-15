@@ -44,7 +44,9 @@ class ServerRepository:
         """
         raw = doc.model_dump(by_alias=True)
         server_id = raw.pop("_id")
-        raw.pop("maintenance", None)   # Never overwrite maintenance via CronJob
+        raw.pop("maintenance", None)      # Never overwrite maintenance via CronJob
+        raw.pop("conflict_vendors", None) # Cleared explicitly below to auto-heal conflicts
+        raw["conflict_vendors"] = None    # Reset on every sync — clears resolved conflicts
 
         await self._collection.update_one(
             {"_id": server_id},
@@ -70,7 +72,7 @@ class ServerRepository:
 
     async def get_server(self, name: str) -> Optional[ServerDocument]:
         """Return a single server document by name."""
-        raw = await self._collection.find_one({"_id": name})
+        raw = await self._collection.find_one({"_id": name.lower().strip()})
         if raw:
             try:
                 return ServerDocument.model_validate(raw)
@@ -82,17 +84,25 @@ class ServerRepository:
     async def set_maintenance(self, name: str, info: MaintenanceInfo) -> None:
         """Embed maintenance record into the server document."""
         result = await self._collection.update_one(
-            {"_id": name},
+            {"_id": name.lower().strip()},
             {"$set": {"maintenance": info.model_dump()}},
         )
         if result.matched_count == 0:
             raise ValueError(f"Server '{name}' not found in MongoDB")
         logger.info(f"Maintenance set for server: {name}")
 
+    async def set_conflict(self, name: str, vendors: list[str]) -> None:
+        """Mark a server as conflicted — same name returned by multiple vendors."""
+        await self._collection.update_one(
+            {"_id": name.lower().strip()},
+            {"$set": {"conflict_vendors": vendors}},
+        )
+        logger.warning(f"Conflict flagged for '{name}': vendors={vendors}")
+
     async def remove_maintenance(self, name: str) -> None:
         """Clear the maintenance record from the server document."""
         result = await self._collection.update_one(
-            {"_id": name},
+            {"_id": name.lower().strip()},
             {"$set": {"maintenance": None}},
         )
         if result.matched_count == 0:
