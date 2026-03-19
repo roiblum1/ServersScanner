@@ -345,7 +345,9 @@ class DellStrategy(VendorStrategy):
                 return partitions[0].get("CurrentMacAddress")
 
             # Data servers: use last interface, last port, last partition
-            elif "data" in server_name_lower:
+            # Old format: "data" literal in name (e.g. ocp4-hypershift-data-zone-01)
+            # New format: "-<N>tb-" storage spec in name (e.g. ocp-dell-r660-site1-128c-1024gb-10tb-ABC123)
+            elif "data" in server_name_lower or re.search(r'-\d+tb-', server_name_lower):
                 logger.info(f"Using 'data' server logic for {server_name}")
                 last_interface = network_interfaces[-1]
                 ports = last_interface.get("Ports", [])

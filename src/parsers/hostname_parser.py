@@ -4,7 +4,7 @@ Hostname parser for extracting server names from Kubernetes Agent resources.
 Logic:
 1. Try to use `hostname` field
 2. If `hostname` is a MAC address, use `requestedHostname` instead
-3. Only consider hosts matching the pattern (ocp4-hypershift-*)
+3. Only consider hosts matching the pattern (ocp4-hypershift-* or ocp-*)
 """
 
 import re
@@ -26,8 +26,8 @@ class HostnameParser:
         r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$|^([0-9A-Fa-f]{12})$'
     )
 
-    # Server name pattern
-    SERVER_NAME_PATTERN = re.compile(r'ocp4-hypershift', re.IGNORECASE)
+    # Server name pattern — matches ocp4-hypershift-* and ocp-* naming conventions
+    SERVER_NAME_PATTERN = re.compile(r'(?:ocp4-hypershift|ocp-)', re.IGNORECASE)
 
     @classmethod
     def is_mac_address(cls, value: str) -> bool:
@@ -53,7 +53,7 @@ class HostnameParser:
             name: Server name to validate
 
         Returns:
-            True if name contains 'ocp4-hypershift'
+            True if name contains 'ocp4-hypershift' or starts with 'ocp-'
         """
         if not name:
             return False

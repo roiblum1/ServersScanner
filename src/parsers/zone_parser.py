@@ -1,12 +1,18 @@
 """
 Zone parser for extracting zone names from server profile names.
 
-Examples:
+Examples (ocp4-hypershift prefix):
 - ocp4-hypershift-zone-a-01 → zone-a
 - ocp4-hypershift-data-zone-b-01 → zone-b (data prefix)
 - ocp4-hypershift-h100-zone-c-01 → zone-c (GPU prefix)
 - ocp4-hypershift-zone-d-v100-01 → zone-d (GPU suffix)
 - ocp4-hypershift-zone-e-l4-01 → zone-e
+
+Examples (ocp- prefix, zone is 4th dash-segment):
+- ocp-dell-r660-site1-128c-1024gb-ABC123 → site1
+- ocp-dell-r660-site1-128c-1024gb-10tb-ABC123 → site1 (data)
+- ocp-dell-h200-site1-128c-1024gb-ABC123 → site1 (H200)
+- ocp-cisco-m5-site1-128c-1024gb-ABC123 → site1
 """
 
 import re
@@ -28,6 +34,10 @@ class ZoneParser:
 
     # Patterns to extract zone (ordered by specificity)
     ZONE_PATTERNS = [
+        # NEW FORMAT: ocp-<vendor>-<model>-<site>-...  (zone = 4th dash-segment)
+        # Handles all sub-types: normal, data (-10tb-), H200, Cisco
+        re.compile(r'^ocp-[a-zA-Z0-9]+-[a-zA-Z0-9]+-([a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)-', re.IGNORECASE),
+
         # PREFIX PATTERNS (type before zone)
         # Pattern: ocp4-hypershift-data-<zone>-<anything>
         re.compile(r'ocp4-hypershift-data-([a-zA-Z0-9\-]+?)-(?:\d+|l4)', re.IGNORECASE),

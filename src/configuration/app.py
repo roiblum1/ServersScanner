@@ -63,7 +63,7 @@ class AppConfig:
     SYNC_BATCH_DELAY = float(os.getenv("SYNC_BATCH_DELAY", "1.0"))
 
     # Defaults
-    DEFAULT_ZONE_PATTERN = r"^ocp4-hypershift-.*"
+    DEFAULT_ZONE_PATTERN = r"^(?:ocp4-hypershift|ocp)-.*"
     DEFAULT_OUTPUT_FORMAT = "list"
 
     # Timeouts

@@ -41,7 +41,7 @@ class SyncService:
         self,
         strategies: List[VendorStrategy],
         server_repo: ServerRepository,
-        pattern: str = r"^ocp4-hypershift-.*",
+        pattern: str = r"^(?:ocp4-hypershift|ocp)-.*",
         batch_size: int = 50,
         batch_delay: float = 1.0,
     ):
