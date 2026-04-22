@@ -5,9 +5,8 @@ metadata:
   labels:
     {{- include "server-scanner-dashboard.labels" . | nindent 4 }}
 data:
-  # Cache settings
+  # Cache settings (in-memory TTL for MongoDB reads)
   CACHE_TTL_SECONDS: {{ .Values.config.cacheTtlSeconds | quote }}
-  BACKGROUND_SCAN_INTERVAL: {{ .Values.config.backgroundScanInterval | quote }}
 
   # Server settings
   HOST: {{ .Values.config.host | quote }}
@@ -20,11 +19,17 @@ data:
   # Kubernetes settings
   K8S_NAMESPACE: {{ .Values.config.k8sNamespace | quote }}
 
+  # MongoDB
+  MONGO_DB_NAME: {{ .Values.config.mongoDbName | quote }}
+
+  # TLS/SSL verification (applies to HP, Dell, Cisco, Kubernetes, MongoDB)
+  TLS_VERIFY: {{ .Values.config.tlsVerify | quote }}
+
+  # CronJob sync rate-limit settings
+  SYNC_BATCH_SIZE: {{ .Values.config.syncBatchSize | quote }}
+  SYNC_BATCH_DELAY: {{ .Values.config.syncBatchDelay | quote }}
+
   # Feature flags
   ENABLE_CACHING: {{ .Values.config.enableCaching | quote }}
-  ENABLE_BACKGROUND_SCAN: {{ .Values.config.enableBackgroundScan | quote }}
   ENABLE_METRICS: {{ .Values.config.enableMetrics | quote }}
   DEBUG: {{ .Values.config.debug | quote }}
-
-  # Data storage directory
-  DATA_DIR: {{ .Values.config.dataDir | quote }}

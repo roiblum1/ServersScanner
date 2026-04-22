@@ -118,23 +118,11 @@ readinessProbe:
   failureThreshold: 3
 
 # ============================================================================
-# Persistent Volume Claim (for maintenance data storage)
-# ============================================================================
-persistence:
-  enabled: true
-  storageClass: ""  # Leave empty for default, or specify: "nfs-client", "efs-sc", etc.
-  accessMode: ReadWriteMany  # Multi-pod support for maintenance data
-  size: 1Gi  # Sufficient for maintenance records
-  annotations: {}
-  # existingClaim: ""  # Use existing PVC instead of creating new
-
-# ============================================================================
 # ConfigMap Configuration
 # ============================================================================
 config:
-  # Cache settings
-  cacheTtlSeconds: "3600"
-  backgroundScanInterval: "3600"
+  # Cache settings (in-memory TTL for MongoDB reads)
+  cacheTtlSeconds: "300"
 
   # Server settings
   host: "0.0.0.0"
@@ -147,35 +135,45 @@ config:
   # Kubernetes settings
   k8sNamespace: "assisted-installer"
 
+  # MongoDB
+  mongoDbName: "server_scanner"
+
+  # TLS/SSL — set to "false" when using self-signed / internal certs (typical in lab/prod infra)
+  # Applies to: HP OneView, Dell OME, Cisco UCS, Kubernetes API, MongoDB
+  tlsVerify: "false"
+
+  # CronJob sync rate-limit protection
+  syncBatchSize: "50"
+  syncBatchDelay: "1.0"
+
   # Feature flags
   enableCaching: "true"
-  enableBackgroundScan: "true"
   enableMetrics: "false"
   debug: "false"
 
-  # Data storage directory
-  dataDir: "/app/data"
-
 # ============================================================================
-# Secrets (vendor credentials and K8s tokens)
+# Secrets (vendor credentials, K8s tokens, MongoDB URI)
 # ============================================================================
 secrets:
-  # HP OneView
+  # MongoDB (required)
+  mongoUri: ""
+
+  # HP OneView (CronJob only)
   oneviewIp: ""
   oneviewUsername: ""
   oneviewPassword: ""
 
-  # Dell OME
+  # Dell OME (CronJob only)
   omeIp: ""
   omeUsername: ""
   omePassword: ""
 
-  # Cisco UCS Central
+  # Cisco UCS Central (CronJob only)
   ucsCentralIp: ""
   ucsCentralUsername: ""
   ucsCentralPassword: ""
 
-  # Cisco UCS Manager (used to connect to individual domains)
+  # Cisco UCS Manager (CronJob only)
   ucsManagerUsername: ""
   ucsManagerPassword: ""
 
@@ -186,6 +184,24 @@ secrets:
 
   # Optional: Zone filtering
   zones: ""
+
+# ============================================================================
+# CronJob (daily vendor sync → MongoDB)
+# ============================================================================
+cronjob:
+  enabled: true
+  schedule: "0 6 * * *"   # Daily at 06:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  restartPolicy: OnFailure
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
 
 # Use existing secret instead of creating new one
 existingSecret: ""

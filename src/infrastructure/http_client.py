@@ -29,7 +29,7 @@ class VendorHTTPClient:
     def __init__(
         self,
         base_url: str,
-        verify_ssl: bool = False,
+        verify_ssl: bool = None,  # None → read from AppConfig.TLS_VERIFY
         timeout: int = 30,
         max_retries: int = 3
     ):
@@ -42,8 +42,12 @@ class VendorHTTPClient:
             timeout: Request timeout in seconds
             max_retries: Maximum number of retry attempts for failed requests
         """
+        from ..config import AppConfig
+        if verify_ssl is None:
+            verify_ssl = AppConfig.TLS_VERIFY
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.verify_ssl = verify_ssl
         self.session = Session()
         self.session.verify = verify_ssl
         self._setup_retries(max_retries)
@@ -94,7 +98,6 @@ class VendorHTTPClient:
             json=json_data,
             headers=headers,
             timeout=self.timeout,
-            verify=False,
             **kwargs
         )
         response.raise_for_status()
@@ -128,7 +131,6 @@ class VendorHTTPClient:
             params=params,
             headers=headers,
             timeout=self.timeout,
-            verify=False,
             **kwargs
         )
         response.raise_for_status()
@@ -159,7 +161,6 @@ class VendorHTTPClient:
             url,
             headers=headers,
             timeout=self.timeout,
-            verify=False,
             **kwargs
         )
         response.raise_for_status()

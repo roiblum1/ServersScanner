@@ -6,7 +6,7 @@ and system status.
 """
 
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 import logging
 from ..models.api_responses import (
     DashboardData,
@@ -27,6 +27,8 @@ router = APIRouter(tags=["dashboard"])
 async def get_servers(
     zone_filter: Optional[str] = None,
     force_refresh: bool = False,
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(500, ge=10, le=2000, description="Servers per page"),
     cache_repo: CacheRepository = Depends(get_cache_repo),
     dashboard_service: DashboardService = Depends(get_dashboard_service)
 ):
@@ -36,29 +38,24 @@ async def get_servers(
     Args:
         zone_filter: Optional comma-separated list of zones to filter
         force_refresh: Force a fresh scan ignoring cache
+        page: Page number (1-based)
+        page_size: Number of servers per page (10–2000, default 500)
 
     Returns:
         Dashboard data with servers grouped by zone and vendor
     """
-    cache_key = f"dashboard_{zone_filter or 'all'}"
+    cache_key = f"dashboard_{zone_filter or 'all'}_{page}_{page_size}"
 
     try:
         # Check cache first (unless force refresh)
         if not force_refresh:
             cached_entry = await cache_repo.get(cache_key)
             if cached_entry:
-                # HYBRID APPROACH: Use cached vendor scan data (expensive)
-                # but refresh maintenance data (cheap PVC read)
                 data = cached_entry.data
-                logger.info(f"Using cached vendor data, refreshing maintenance status...")
-
-                # Refresh maintenance status for all servers
-                data = await dashboard_service.refresh_maintenance(data)
-
                 data.cache_info.cached = True
                 data.cache_info.age_seconds = cached_entry.age_seconds()
                 data.cache_info.next_refresh_seconds = cache_repo.ttl_seconds - cached_entry.age_seconds()
-
+                logger.info(f"Returning cached dashboard (age: {data.cache_info.age_seconds}s)")
                 return data
 
         # Cache miss or force refresh - perform scan
@@ -73,7 +70,7 @@ async def get_servers(
             await cache_repo.mark_scanning(cache_key, True)
 
             # Perform scan
-            dashboard_data = await dashboard_service.build_dashboard(zone_filter)
+            dashboard_data = await dashboard_service.build_dashboard(zone_filter, page, page_size)
 
             # Store in cache
             await cache_repo.set(cache_key, dashboard_data)

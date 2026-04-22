@@ -1,8 +1,8 @@
 """
-Maintenance API routes for server maintenance management.
+Maintenance API routes — set, remove, and query per-server maintenance records.
 
-Provides endpoints for setting, removing, and querying server
-maintenance status.
+Maintenance data is stored as an embedded sub-document inside each server's
+MongoDB document. Changes are immediately visible on the next dashboard load.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,10 +10,10 @@ import logging
 from ..models.api_responses import (
     MaintenanceInfo,
     StatusResponse,
-    ServerDetailsResponse
+    ServerDetailsResponse,
 )
-from ..repositories import MaintenanceRepository
-from .dependencies import get_maintenance_repo
+from ..storage.database.server_repository import ServerRepository
+from .dependencies import get_server_repo
 
 logger = logging.getLogger(__name__)
 
@@ -24,94 +24,58 @@ router = APIRouter(prefix="/api/servers", tags=["maintenance"])
 async def set_maintenance(
     server_name: str,
     maintenance: MaintenanceInfo,
-    maintenance_repo: MaintenanceRepository = Depends(get_maintenance_repo)
+    server_repo: ServerRepository = Depends(get_server_repo),
 ):
-    """
-    Set server to maintenance mode.
-
-    Args:
-        server_name: Server profile name
-        maintenance: Maintenance information (reason, severity, timestamp)
-
-    Returns:
-        Success status
-
-    Note:
-        Changes are immediately visible on next API call due to hybrid caching.
-    """
+    """Set server to maintenance mode."""
     try:
-        # Store maintenance record
-        await maintenance_repo.set(server_name, maintenance)
-
-        logger.info(f"Maintenance set for {server_name}, will be visible on next API call")
-
+        await server_repo.set_maintenance(server_name, maintenance)
+        logger.info(f"Maintenance set for {server_name}")
         return StatusResponse(
             status="success",
             server=server_name,
-            message=f"Maintenance set for {server_name}"
+            message=f"Maintenance set for {server_name}",
         )
-
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error setting maintenance for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error setting maintenance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error setting maintenance: {e}")
 
 
 @router.delete("/{server_name}/maintenance", response_model=StatusResponse)
 async def remove_maintenance(
     server_name: str,
-    maintenance_repo: MaintenanceRepository = Depends(get_maintenance_repo)
+    server_repo: ServerRepository = Depends(get_server_repo),
 ):
-    """
-    Remove maintenance status from server.
-
-    Args:
-        server_name: Server profile name
-
-    Returns:
-        Success status
-
-    Note:
-        Changes are immediately visible on next API call due to hybrid caching.
-    """
+    """Remove maintenance status from server."""
     try:
-        await maintenance_repo.remove(server_name)
-
-        logger.info(f"Maintenance removed for {server_name}, will be visible on next API call")
-
+        await server_repo.remove_maintenance(server_name)
+        logger.info(f"Maintenance removed for {server_name}")
         return StatusResponse(
             status="removed",
             server=server_name,
-            message=f"Maintenance removed for {server_name}"
+            message=f"Maintenance removed for {server_name}",
         )
-
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error removing maintenance for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error removing maintenance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error removing maintenance: {e}")
 
 
 @router.get("/{server_name}", response_model=ServerDetailsResponse)
 async def get_server_details(
     server_name: str,
-    maintenance_repo: MaintenanceRepository = Depends(get_maintenance_repo)
+    server_repo: ServerRepository = Depends(get_server_repo),
 ):
-    """
-    Get details for a single server including maintenance status.
-
-    Args:
-        server_name: Server profile name
-
-    Returns:
-        Server details with maintenance info if applicable
-    """
+    """Get details for a single server including maintenance status."""
     try:
-        # Get maintenance info
-        maintenance = await maintenance_repo.get(server_name)
-
-        return ServerDetailsResponse(
-            name=server_name,
-            maintenance=maintenance
-        )
-
+        doc = await server_repo.get_server(server_name)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+        return ServerDetailsResponse(name=doc.id, maintenance=doc.maintenance)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting server details for {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting server details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting server details: {e}")

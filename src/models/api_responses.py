@@ -5,7 +5,7 @@ Provides type-safe Pydantic models for all API responses with validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Literal
+from typing import Dict, List, Optional, Literal
 
 
 class MaintenanceInfo(BaseModel):
@@ -17,14 +17,34 @@ class MaintenanceInfo(BaseModel):
 
 
 class ServerInfo(BaseModel):
-    """Server information with installation status"""
-    name: str = Field(..., min_length=1, description="Server profile name")
-    vendor: str = Field(..., description="Vendor name (HP, DELL, CISCO)")
-    zone: Optional[str] = Field(None, description="Zone/location name")
-    status: Literal["available", "installed", "maintenance"] = Field(..., description="Server status")
-    cluster: Optional[str] = Field(None, description="Management cluster the agent is on")
-    deployment_cluster: Optional[str] = Field(None, description="Cluster the agent is deployed to")
-    maintenance: Optional[MaintenanceInfo] = Field(None, description="Maintenance details if in maintenance mode")
+    """Server information with status, hardware details, and maintenance."""
+    name: str = Field(..., min_length=1)
+    vendor: str
+    zone: Optional[str] = None
+    status: Literal["available", "installed", "maintenance", "error"]
+    cluster: Optional[str] = None
+    deployment_cluster: Optional[str] = None
+    maintenance: Optional[MaintenanceInfo] = None
+    conflict_vendors: Optional[list[str]] = None
+
+    # Hardware details (from MongoDB, populated by CronJob)
+    bmc_address: Optional[str] = None
+    mac_address: Optional[str] = None
+    cpu_model: Optional[str] = None
+    cpu_count: Optional[int] = None
+    cpu_cores: Optional[int] = None
+    memory_gb: Optional[float] = None
+    model: Optional[str] = None
+    serial: Optional[str] = None
+    total_disk_gb: Optional[float] = None
+
+
+class PaginationInfo(BaseModel):
+    """Pagination metadata"""
+    page: int = Field(..., ge=1, description="Current page (1-based)")
+    page_size: int = Field(..., ge=1, description="Servers per page")
+    total: int = Field(..., ge=0, description="Total matching servers")
+    total_pages: int = Field(..., ge=0, description="Total pages")
 
 
 class ZoneData(BaseModel):
@@ -53,6 +73,7 @@ class DashboardData(BaseModel):
     clusters: List[ClusterStats] = Field(..., description="Cluster statistics")
     summary: Dict[str, int] = Field(..., description="Summary statistics")
     cache_info: CacheInfo = Field(..., description="Cache metadata")
+    pagination: Optional[PaginationInfo] = Field(None, description="Pagination metadata")
 
 
 class StatusResponse(BaseModel):

@@ -1,413 +1,120 @@
-# Server Scanner
+# Server Scanner Dashboard
 
-Multi-vendor server profile scanner for HP OneView, Dell OME, and Cisco UCS Central.
+Multi-vendor server inventory dashboard for HP OneView, Dell OME, and Cisco UCS Central.
 
-Uses the **Strategy Pattern** to cleanly separate vendor-specific logic into modular, maintainable components.
+A daily Kubernetes CronJob syncs all server hardware details into MongoDB. The web dashboard reads from MongoDB and overlays live Kubernetes installation status at request time. Maintenance records are stored directly in MongoDB server documents.
 
-## Project Structure
+## Architecture
 
 ```
-Scan_Servers/
-├── src/
-│   ├── scan_servers.py            # Main CLI entry point
-│   ├── web_ui.py                  # FastAPI web dashboard
-│   ├── config.py                  # Centralized configuration
-│   ├── __init__.py                # Package initialization
-│   ├── filters/                   # Agent/zone filtering
-│   ├── formatters/                # Output formatters
-│   ├── models/                    # Data models
-│   ├── parsers/                   # Vendor parsers
-│   ├── repositories/              # Strategy factory
-│   ├── services/                  # Scanner service
-│   └── strategies/                # Vendor strategies
-├── static/                        # Web UI static files
-│   ├── html/
-│   ├── css/
-│   └── js/
-├── deploy/
-│   └── helm/                      # Helm chart for OpenShift
-├── Dockerfile                     # Container image
-├── docker-compose.yml             # Docker Compose config
-├── requirements.txt               # Python dependencies
-└── .env.example                   # Example environment config
+CronJob (daily)                     Web Dashboard (always-on)
+src/cli/sync_mongo.py               src/web_ui.py
+        │                                   │
+  SyncService                       DashboardService
+        │                                   │              \
+VendorStrategy                   ServerRepository    KubernetesRepository
+.get_full_server_data()                    │           (live K8s queries)
+        │                                  │
+      MongoDB ───────────────────────────── ┘
+     (servers collection)
 ```
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+pip install ucscsdk ucsmsdk   # optional: Cisco UCS support
 
-# For Cisco UCS support (optional)
-pip install ucscsdk ucsmsdk
+cp .env.example .env          # fill in MONGO_URI + vendor credentials
 
-# Configure credentials
-cp .env.example .env
-# Edit .env with your credentials
-
-# Run the scanner (default: simple list)
-python -m src.scan_servers
-
-# Start the web UI
+# Web dashboard (reads from MongoDB)
 python -m src.web_ui
+
+# Daily sync (writes to MongoDB) — also runs as Kubernetes CronJob
+python -m src.cli.sync_mongo
 ```
 
-## Usage
+## Configuration
 
-### Basic Usage
+All configuration is via environment variables (`.env` or Kubernetes ConfigMap/Secret).
 
-```bash
-# Scan all vendors for ocp4-hypershift-* servers (default: list format)
-python -m src.scan_servers
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MONGO_URI` | ✅ web + sync | — | MongoDB connection string |
+| `MONGO_DB_NAME` | — | `server_scanner` | MongoDB database name |
+| `TLS_VERIFY` | — | `false` | TLS cert verification (HP, Dell, Cisco, K8s, MongoDB) |
+| `ONEVIEW_IP/USERNAME/PASSWORD` | ✅ sync | — | HP OneView credentials |
+| `OME_IP/USERNAME/PASSWORD` | ✅ sync | — | Dell OME credentials |
+| `UCS_CENTRAL_IP/USERNAME/PASSWORD` | ✅ sync | — | Cisco UCS Central credentials |
+| `UCS_MANAGER_USERNAME/PASSWORD` | ✅ sync | — | Cisco UCS Manager credentials |
+| `K8S_CLUSTER_NAMES` | optional | — | Comma-separated cluster names |
+| `K8S_DOMAIN_NAME` | optional | — | Cluster API domain |
+| `K8S_TOKEN` | optional | — | Per-cluster tokens (comma-separated) |
+| `SYNC_BATCH_SIZE` | — | `50` | Dell OME: servers per batch |
+| `SYNC_BATCH_DELAY` | — | `1.0` | Dell OME: seconds between batches |
 
-# Custom pattern
-python -m src.scan_servers --pattern "ocp4-.*"
+## MongoDB Document Schema
 
-# Scan specific vendor only
-python -m src.scan_servers --vendor HP
-python -m src.scan_servers --vendor DELL
-python -m src.scan_servers --vendor CISCO
-
-# Scan multiple vendors
-python -m src.scan_servers --vendor HP --vendor DELL
-```
-
-### Output Formats
-
-```bash
-# Simple list (DEFAULT) - Just server names
-python -m src.scan_servers
-python -m src.scan_servers --format list
-
-# Detailed table - Names + MAC + BMC IP + Domain
-python -m src.scan_servers --format table
-
-# JSON output - Full structured data
-python -m src.scan_servers --format json
-python -m src.scan_servers --json  # shortcut
-```
-
-### Kubernetes BMH Filtering (Optional)
-
-The scanner can automatically filter out servers that are already installed (exist as BareMetalHost resources in Kubernetes):
-
-```bash
-# Default: Show only AVAILABLE servers (filters out installed ones)
-python -m src.scan_servers
-
-# Show ALL servers including installed ones
-python -m src.scan_servers --show-all
-```
-
-**How it works:**
-
-1. Queries all configured Kubernetes clusters for BareMetalHost (BMH) resources
-2. Filters out servers whose names match existing BMH resources
-3. Shows only available (not installed) servers
-
-**Configuration** (add to `.env`):
-```bash
-K8S_CLUSTER_NAMES=cluster1,cluster2,cluster3
-K8S_DOMAIN_NAME=example.com
-
-# RECOMMENDED: Use token authentication (modern Kubernetes)
-# Option 1: Single token for all clusters (if they share the same service account)
-K8S_TOKEN=your-service-account-token-here
-
-# Option 2: Per-cluster tokens (comma-separated, one per cluster in same order)
-# K8S_TOKEN=token-for-cluster1,token-for-cluster2,token-for-cluster3
-
-K8S_NAMESPACE=inventory
-
-# DEPRECATED: Username/password (may not work with modern clusters)
-# K8S_USERNAME=admin
-# K8S_PASSWORD=your-password
-```
-
-**Important**: Modern Kubernetes clusters require **token-based authentication**. See [GET_TOKEN.md](GET_TOKEN.md) for instructions on obtaining a service account token.
-
-**API Server Format:** `https://api.<cluster_name>.<domain_name>:6443`
-
-**Example workflow:**
-
-```bash
-# Step 1: Scan without K8S filter (shows all servers)
-python scan_servers.py --show-all
-# Output: TOTAL: 20 servers (all vendor profiles)
-
-# Step 2: Configure K8S filter in .env, then scan (default behavior)
-python scan_servers.py
-# Output: TOTAL: 12 servers (only available, 8 already installed)
-
-# With verbose logging to see filtering details
-python scan_servers.py --verbose
-# Shows: "DELL: Filtered out 3 installed servers, 5 available"
-```
-
-### Advanced Options
-
-```bash
-# Check for duplicate names across vendors
-python scan_servers.py --check-duplicates
-
-# Use specific .env file
-python scan_servers.py --env-file /path/to/.env
-
-# Enable verbose logging
-python scan_servers.py --verbose
-
-# Combine options
-python scan_servers.py --pattern "ocp4-tlv-.*" --vendor HP --format table
-```
-
-## Example Outputs
-
-### List Format (Default)
-
-```
-🔍 Scanning for servers matching: ^ocp4-hypershift-.*
-
-================================================================================
-SERVER PROFILES
-================================================================================
-
-CISCO:
-  - ocp4-hypershift-ucs-001
-  - ocp4-hypershift-ucs-002
-  - ocp4-hypershift-ucs-003
-
-DELL:
-  - ocp4-hypershift-server01
-  - ocp4-hypershift-server02
-  - ocp4-hypershift-server03
-  - ocp4-hypershift-server04
-  - ocp4-hypershift-server05
-  - ocp4-hypershift-server06
-  - ocp4-hypershift-server07
-  - ocp4-hypershift-server08
-
-HP:
-  - ocp4-hypershift-rf-001
-  - ocp4-hypershift-rf-002
-  - ocp4-hypershift-rf-003
-  - ocp4-hypershift-rf-004
-  - ocp4-hypershift-rf-005
-
-================================================================================
-
-Summary:
-  CISCO: 3 servers
-  DELL: 8 servers
-  HP: 5 servers
-  TOTAL: 16 servers
-```
-
-### Table Format (Detailed)
-
-```bash
-python scan_servers.py --format table
-```
-
-```
-====================================================================================================
-SERVER NAME                              VENDOR   BMC IP           MAC ADDRESS        DOMAIN
-====================================================================================================
-ocp4-hypershift-server01                 DELL     10.1.1.101       AA:BB:CC:DD:EE:01  -
-ocp4-hypershift-server02                 DELL     10.1.1.102       AA:BB:CC:DD:EE:02  -
-ocp4-hypershift-rf-001                   HP       10.2.2.101       11:22:33:44:55:01  -
-ocp4-hypershift-rf-002                   HP       10.2.2.102       11:22:33:44:55:02  -
-ocp4-hypershift-ucs-001                  CISCO    10.3.3.101       66:77:88:99:AA:01  ucs-domain-1
-====================================================================================================
-
-Summary:
-  CISCO: 3 servers
-  DELL: 8 servers
-  HP: 5 servers
-  TOTAL: 16 servers
-```
-
-### JSON Format
-
-```bash
-python scan_servers.py --json
-```
+Collection: `servers`
 
 ```json
 {
-  "timestamp": "2026-01-07T10:30:00Z",
-  "servers": {
-    "HP": [
-      {
-        "name": "ocp4-hypershift-rf-001",
-        "vendor": "HP",
-        "mac_address": "11:22:33:44:55:01",
-        "bmc_ip": "10.2.2.101",
-        "serial_number": "ABC123",
-        "model": "ProLiant DL360 Gen10"
-      }
-    ],
-    "DELL": [
-      {
-        "name": "ocp4-hypershift-server01",
-        "vendor": "DELL",
-        "mac_address": "AA:BB:CC:DD:EE:01",
-        "bmc_ip": "10.1.1.101",
-        "serial_number": "DEF456",
-        "model": "PowerEdge R640"
-      }
-    ],
-    "CISCO": [
-      {
-        "name": "ocp4-hypershift-ucs-001",
-        "vendor": "CISCO",
-        "mac_address": "66:77:88:99:AA:01",
-        "bmc_ip": "10.3.3.101",
-        "domain": "ucs-domain-1"
-      }
-    ]
-  }
+  "_id": "ocp4-hypershift-zone-a-01",
+  "vendor": "HP",
+  "zone": "zone-a",
+  "bmc_address": "10.0.0.1",
+  "mac_address": "aa:bb:cc:dd:ee:ff",
+  "cpu_model": "Intel Xeon Gold 6230R",
+  "cpu_count": 2,
+  "cpu_cores": 26,
+  "memory_gb": 256,
+  "model": "ProLiant DL380 Gen10",
+  "serial": "MXQ12345",
+  "disks": [{"size_gb": 960, "type": "SSD", "model": "..."}],
+  "maintenance": null,
+  "last_scanned": "2025-03-12T06:00:00Z"
 }
 ```
 
-### Duplicate Detection
+Maintenance is embedded in the server document. The CronJob upserts hardware fields without touching the `maintenance` field, so maintenance records survive daily re-syncs.
+
+## Sync Behaviour by Vendor
+
+| Vendor | Bulk calls | Per-server calls | Notes |
+|---|---|---|---|
+| HP OneView | 2 (profiles + hardware) | 0 | Bulk hardware lookup, cross-referenced by URI |
+| Dell OME | 2 (profiles + devices) | 4 per server | MAC, CPU, memory, storage inventory; batched with delay |
+| Cisco UCS | 1 Central + 1 per domain | ~6 per server | Groups by UCS Manager domain to minimise connections |
+
+## Web UI Features
+
+- Server cards: name, model, serial — click for full hardware details
+- Inline 🔧 maintenance button per card (no page scroll needed)
+- Live name search (client-side, instant)
+- Zone filter dropdown (populated from API, persists across zone switches)
+- Status pills: All / Available / Installed / Maintenance
+- Dark/light theme
+
+## Helm Deployment
 
 ```bash
-python scan_servers.py --check-duplicates
+helm upgrade --install server-scanner \
+  deploy/helm/server-scanner-dashboard/ \
+  --set secrets.mongoUri="mongodb://..." \
+  --set secrets.oneviewIp="10.0.0.1" \
+  --set secrets.oneviewUsername="admin" \
+  --set secrets.oneviewPassword="..." \
+  --set config.tlsVerify="false"
 ```
 
-```
-⚠️  DUPLICATES FOUND across vendors:
-   - ocp4-hypershift-server01 exists in: HP, DELL
-```
+The CronJob runs daily at 06:00 (`config.cronjob.schedule`). The web Deployment and CronJob share the same Secret, so vendor credentials only need to be set once.
 
-## Environment Variables
+## Local Development with Test Data
 
-Create a `.env` file with your credentials:
+```bash
+# Seed fake servers into MongoDB for UI testing
+python seed_test_data.py
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ONEVIEW_IP` | For HP | HP OneView IP address |
-| `ONEVIEW_USERNAME` | For HP | HP OneView username (default: administrator) |
-| `ONEVIEW_PASSWORD` | For HP | HP OneView password |
-| `OME_IP` | For Dell | Dell OME IP address |
-| `OME_USERNAME` | For Dell | Dell OME username (default: admin) |
-| `OME_PASSWORD` | For Dell | Dell OME password |
-| `UCS_CENTRAL_IP` | For Cisco | Cisco UCS Central IP |
-| `UCS_CENTRAL_USERNAME` | For Cisco | UCS Central username (default: admin) |
-| `UCS_CENTRAL_PASSWORD` | For Cisco | UCS Central password |
-| `UCS_MANAGER_USERNAME` | For Cisco | UCS Manager username (default: admin) |
-| `UCS_MANAGER_PASSWORD` | For Cisco | UCS Manager password |
-| `K8S_CLUSTER_NAMES` | Optional | Comma-separated Kubernetes cluster names |
-| `K8S_DOMAIN_NAME` | Optional | Kubernetes cluster domain name |
-| `K8S_USERNAME` | Optional | Kubernetes username for authentication |
-| `K8S_PASSWORD` | Optional | Kubernetes password for authentication |
-| `K8S_TOKEN` | Optional | Kubernetes token (alternative to username/password) |
-| `K8S_NAMESPACE` | Optional | Kubernetes namespace for BMH resources (default: inventory) |
-
-### Kubernetes BMH Filter Prerequisites
-
-If you want to use the Kubernetes BMH filtering feature:
-
-1. **Install Python Kubernetes client**:
-   ```bash
-   pip install kubernetes
-   ```
-
-2. **Cluster access**: Ensure your credentials (username/password or token) can access the clusters
-
-3. **BareMetalHost CRD**: Clusters must have the BareMetalHost CustomResourceDefinition installed (from Metal3 or OpenShift)
-   - The filter queries `baremetalhosts.metal3.io/v1alpha1` custom resources
-   - If the CRD is not found in a cluster, it will be skipped with a warning
-
-**Why Python Kubernetes client?**
-- ✅ Pure Python - no external kubectl binary required
-- ✅ Better error handling and type safety
-- ✅ Faster - no subprocess overhead
-- ✅ More flexible authentication options
-- ✅ Better suited for development and testing
-
-## Architecture
-
-This project follows the **Strategy Pattern** for clean separation of vendor-specific logic:
-
-- **`VendorStrategy`** - Abstract base class defining the interface
-- **`HPServerStrategy`** - HP OneView implementation
-- **`DellServerStrategy`** - Dell OME implementation
-- **`CiscoServerStrategy`** - Cisco UCS Central implementation
-- **`VendorStrategyFactory`** - Factory to create strategy instances
-- **`ServerScanner`** - Unified client that orchestrates all strategies
-
-### Benefits
-
-- **Extensible**: Add new vendors by implementing `VendorStrategy`
-- **Maintainable**: Vendor logic is isolated in separate files
-- **Testable**: Each strategy can be tested independently
-- **Clean**: Main script is simple and focused on CLI concerns
-
-## Integration with BareMetalHostUCS
-
-This project is designed to be compatible with the [BareMetalHostUCS](../BareMetalHostUCS) project. Both share the same:
-
-- **Strategy Pattern architecture** - Same abstract base class structure
-- **Method signatures** - `get_server_info(server_name)` returns `Tuple[Optional[str], Optional[str]]`
-- **Type annotations** - Uses `Tuple` from `typing` module for Python 3.7+ compatibility
-- **Vendor implementations** - HP, Dell, and Cisco strategies follow identical patterns
-
-**Key difference:**
-- **BareMetalHostUCS**: Uses `get_server_info()` for single-server detailed lookups
-- **Scan_Servers**: Uses `get_server_profiles()` for bulk scanning with minimal API calls
-
-Both methods are implemented in all vendor strategies, making the codebase reusable across projects.
-
-## Notes
-
-- Only configured vendors are scanned (missing credentials = skipped)
-- SSL certificate verification is disabled for self-signed certificates
-- Cisco UCS requires the `ucscsdk` and `ucsmsdk` packages
-- The scanner connects to each vendor, queries profiles, and disconnects properly
-- All vendor implementations follow the same pattern used in the BareMetalHostUCS project
-- **READ-ONLY operations**: No data modifications, only queries (GET requests and kubectl get commands)
-
-## Two Scanning Modes
-
-This scanner supports **two distinct use cases**:
-
-### 1. Bulk Scanning - `get_server_profiles(pattern)`
-Used by the CLI scanner to **list many servers efficiently**:
-- Returns ONLY server profile names (no MAC/BMC data)
-- Minimal API calls - very fast
-- Used for inventory and availability checking
-- Default CLI behavior
-
-### 2. Single Server Lookup - `get_server_info(server_name)`
-Used by BareMetalHostUCS project for **detailed single server queries**:
-- Returns MAC address + BMC IP for ONE specific server
-- Makes necessary API calls to fetch hardware details
-- Used when you need to provision/configure a specific server
-- Compatible with BareMetalHostUCS interface
-
-## Command Line Options
-
-```
-usage: scan_servers.py [-h] [--pattern PATTERN] [--vendor {HP,DELL,CISCO}]
-                       [--format {list,table,json}] [--json]
-                       [--env-file ENV_FILE] [--check-duplicates]
-                       [--show-all] [--verbose]
-
-options:
-  -h, --help            show this help message and exit
-  --pattern PATTERN, -p PATTERN
-                        Regex pattern to match server names (default: ^ocp4-hypershift-.*)
-  --vendor {HP,DELL,CISCO}, -v {HP,DELL,CISCO}
-                        Scan specific vendor(s) only (can be repeated)
-  --format {list,table,json}, -f {list,table,json}
-                        Output format: list (default), table (detailed), or json
-  --json, -j            Output as JSON (shortcut for --format json)
-  --env-file ENV_FILE, -e ENV_FILE
-                        Path to .env file with credentials
-  --check-duplicates, -d
-                        Check for duplicate profile names across vendors
-  --show-all            Show all servers including installed ones (default: filter out
-                        installed servers if K8S configured)
-  --verbose             Enable verbose logging
+# Start the dashboard (no vendor credentials needed)
+MONGO_URI="..." python -m src.web_ui
 ```
